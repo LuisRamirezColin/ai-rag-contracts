@@ -1,0 +1,37 @@
+name: contract-intel
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: contract_intel
+      POSTGRES_PASSWORD: contract_intel
+      POSTGRES_DB: contract_intel
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U contract_intel -d contract_intel"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  localstack:
+    image: localstack/localstack:3.8
+    environment:
+      SERVICES: s3
+      AWS_DEFAULT_REGION: us-east-1
+      CONTRACTS_BUCKET: contracts
+    ports:
+      - "4566:4566"
+    volumes:
+      - ./ops/localstack/init-s3.sh:/etc/localstack/init/ready.d/init-s3.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal s3api head-bucket --bucket $${CONTRACTS_BUCKET}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  postgres-data:

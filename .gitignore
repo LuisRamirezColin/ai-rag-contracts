@@ -1,0 +1,39 @@
+# Reference-only legacy code (contains non-public data; never commit)
+legacy/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+*.egg-info/
+dist/
+build/
+
+# Secrets and local config
+.forbidden-names
+.env
+.env.*
+!.env.example
+
+# Data
+data/
+*.pkl
+*.pickle
+
+# Dagster
+.dagster/
+dagster_home/
+tmp*/
+
+# Notebooks
+.ipynb_checkpoints/
+
+# OS / editors
+.DS_Store
+*.code-workspace
+.idea/

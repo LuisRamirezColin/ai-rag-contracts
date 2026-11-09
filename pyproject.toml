@@ -1,0 +1,133 @@
+[tool.uv.workspace]
+members = ["core", "pipelines", "rag_api"]
+
+[tool.uv.sources]
+contract-intel = { workspace = true }
+contract-intel-pipelines = { workspace = true }
+contract-intel-api = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "contract-intel",
+    "contract-intel-pipelines",
+    "contract-intel-api",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "import-linter>=2.1",
+    "pre-commit>=3.8",
+    "httpx>=0.27",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+extend-exclude = ["legacy", "openspec", ".claude"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "N", "S", "ANN", "D"]
+ignore = [
+    "D100", # module docstrings: packages are self-describing by name
+    "D104", # package docstrings
+    "D105", # magic methods
+    "D107", # __init__ documented at class level
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "D", "ANN"]
+"**/migrations/**" = ["D", "ANN"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["contract_intel", "contract_intel_pipelines", "contract_intel_api"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+mypy_path = ["core/src", "pipelines/src", "rag_api/src", "scripts"]
+explicit_package_bases = true
+exclude = ["^legacy/", "^openspec/"]
+
+[[tool.mypy.overrides]]
+module = ["dependency_injector.*", "pgvector.*", "importlinter.*"]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Test functions need no annotations; module-level code (e.g. Protocol
+# conformance assignments) is still type-checked.
+# ("tests.*" is how scripts/tests resolves, since scripts/ is on mypy_path.)
+module = ["core.tests.*", "pipelines.tests.*", "rag_api.tests.*", "tests.*"]
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+disallow_untyped_calls = false
+
+[tool.importlinter]
+root_packages = ["contract_intel", "contract_intel_pipelines", "contract_intel_api"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Core layers: bootstrap > adapters > application > domain"
+type = "layers"
+layers = [
+    "contract_intel.bootstrap",
+    "contract_intel.adapters",
+    "contract_intel.application",
+    "contract_intel.domain",
+]
+
+[[tool.importlinter.contracts]]
+name = "Domain is framework-free"
+type = "forbidden"
+source_modules = ["contract_intel.domain"]
+forbidden_modules = [
+    "pydantic", "pydantic_settings", "sqlalchemy", "asyncpg", "pgvector", "alembic",
+    "dagster", "fastapi", "starlette", "httpx", "dependency_injector",
+    "boto3", "botocore", "openai", "langchain", "langchain_core", "langchain_openai",
+    "langgraph", "pypdf", "pytesseract",
+]
+
+[[tool.importlinter.contracts]]
+name = "Application is framework-free"
+type = "forbidden"
+source_modules = ["contract_intel.application"]
+forbidden_modules = [
+    "pydantic", "pydantic_settings", "sqlalchemy", "asyncpg", "pgvector", "alembic",
+    "dagster", "fastapi", "starlette", "httpx", "dependency_injector",
+    "boto3", "botocore", "openai", "langchain", "langchain_core", "langchain_openai",
+    "langgraph", "pypdf", "pytesseract",
+]
+
+[[tool.importlinter.contracts]]
+name = "Inbound adapters reach outbound adapters only through the composition root"
+type = "forbidden"
+source_modules = ["contract_intel_pipelines", "contract_intel_api"]
+forbidden_modules = ["contract_intel.adapters"]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "API is read-only on the vector index"
+type = "forbidden"
+source_modules = ["contract_intel_api"]
+forbidden_modules = ["contract_intel.application.ports.outbound.vector_index_writer"]
+
+[[tool.importlinter.contracts]]
+name = "Legacy reference code is never imported"
+type = "forbidden"
+source_modules = ["contract_intel", "contract_intel_pipelines", "contract_intel_api"]
+forbidden_modules = ["contract", "contract_pipelines"]
+
+[[tool.importlinter.contracts]]
+name = "Inbound adapters are independent of each other"
+type = "independence"
+modules = ["contract_intel_pipelines", "contract_intel_api"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+addopts = "--import-mode=importlib"
+pythonpath = ["scripts"]
+testpaths = ["core/tests", "pipelines/tests", "rag_api/tests", "scripts/tests"]

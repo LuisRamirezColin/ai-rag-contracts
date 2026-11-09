@@ -1,0 +1,41 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install workspace
+        run: uv sync --frozen --all-packages
+
+      - name: Lint
+        run: |
+          uv run ruff format --check .
+          uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy scripts core/src core/tests core/migrations pipelines/src pipelines/tests rag_api/src rag_api/tests
+
+      - name: Architecture contracts
+        run: uv run lint-imports
+
+      - name: Forbidden identifiers
+        env:
+          FORBIDDEN_NAMES: ${{ secrets.FORBIDDEN_NAMES }}
+        run: uv run python scripts/check_forbidden_identifiers.py
+
+      - name: Tests
+        run: uv run pytest

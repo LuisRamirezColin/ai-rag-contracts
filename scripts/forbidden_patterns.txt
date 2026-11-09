@@ -1,0 +1,18 @@
+# Generic patterns that must never appear in tracked files (Python regex, one per line).
+# Sensitive names (employers, clients) are NOT listed here on purpose: they come from
+# the git-ignored .forbidden-names file or the FORBIDDEN_NAMES CI secret.
+# A line can opt out with the marker: forbidden-identifiers: allow
+
+# Cloud account ids inside ARNs or registry hostnames
+arn:aws:[^:\s]*:[^:\s]*:\d{12}
+\b\d{12}\.(?:dkr\.ecr|d\.codeartifact)\.
+# Personal or corporate email addresses (example domains are fine)
+[A-Za-z0-9._%+-]+@(?!example\.(?:com|org|net)\b)[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}
+# Internal collaboration tools and tunnels
+[A-Za-z0-9-]+\.atlassian\.net
+ngrok(?:-free)?\.(?:app|io|dev)
+# SSO identity-provider parameters
+\bidpid=
+# Local home directories leaking usernames
+/Users/[A-Za-z0-9._-]+/
+/home/[A-Za-z0-9._-]+/code/

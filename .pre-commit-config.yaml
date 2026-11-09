@@ -1,0 +1,31 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+      - id: mypy
+        name: mypy --strict
+        entry: uv run mypy scripts core/src core/tests core/migrations pipelines/src pipelines/tests rag_api/src rag_api/tests
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: import-contracts
+        name: import-linter contracts
+        entry: uv run lint-imports
+        language: system
+        pass_filenames: false
+        types: [python]
+      - id: forbidden-identifiers
+        name: forbidden identifiers scan
+        entry: uv run python scripts/check_forbidden_identifiers.py
+        language: system
+        pass_filenames: false
+        always_run: true

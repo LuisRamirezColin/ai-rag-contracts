@@ -1,0 +1,43 @@
+schema: spec-driven
+
+context: |
+  Portfolio project for an AI Engineer role: contract intelligence with
+  structured clause extraction (LangGraph) plus a hybrid RAG.
+  Write OpenSpec artifacts in Spanish; write code, code comments and repo
+  docs (README, docs/architecture) in English.
+
+  Mandatory architecture: Hexagonal (ports and adapters).
+    - core/src/contract_intel/domain: pure Python, no I/O, no frameworks.
+    - core/src/contract_intel/application: use cases and ports (typing.Protocol);
+      depends only on domain.
+    - core/src/contract_intel/adapters: every framework/SDK lives here
+      (LangChain/LangGraph, SQLAlchemy, boto3, OpenAI, pgvector).
+    - pipelines/ (Dagster) and rag_api/ (FastAPI) are inbound adapters that only
+      call use cases.
+    - Dependencies point inward only. Adapters are wired exclusively in
+      core/src/contract_intel/bootstrap (composition root).
+  SOLID and Clean Code are mandatory: small single-purpose functions,
+  intention-revealing names, typed signatures, no magic numbers, no dead or
+  commented-out code.
+
+  RAG has two decoupled layers: Dagster ingests, extracts and embeds, and is the
+  only writer of the vector index, feeding it continuously; the API only reads it.
+
+  Never include employer or client names, real contract data, internal URLs,
+  account IDs or personal emails. Demo data comes from the public CUAD dataset.
+  legacy/ is reference-only, git-ignored, and must never be imported.
+
+rules:
+  proposal:
+    - State which hexagonal layers (domain, application, adapters, inbound adapters) the change touches
+  design:
+    - Name every new port and its adapter(s) and show the dependency direction
+    - Justify SOLID-relevant decisions, naming the principle applied
+    - Record significant decisions as ADRs under docs/architecture/adr/
+  specs:
+    - Requirements describe observable behavior, never frameworks or libraries
+  tasks:
+    - Include a task keeping import-linter contracts green
+    - Include unit tests for use cases using in-memory fakes of their ports
+    - Include contract tests shared by in-memory fakes and real adapters
+    - Include updating the affected docs/architecture pages

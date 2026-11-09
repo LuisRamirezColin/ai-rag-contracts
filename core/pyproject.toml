@@ -1,0 +1,19 @@
+[project]
+name = "contract-intel"
+version = "0.1.0"
+description = "Contract intelligence core: domain, application ports and use cases, adapters, composition root."
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "dependency-injector>=4.42",
+    "sqlalchemy[asyncio]>=2.0.32",
+    "asyncpg>=0.29",
+    "alembic>=1.13",
+    "pgvector>=0.3",
+]
+
+[build-system]
+requires = ["uv_build>=0.8,<0.14"]
+build-backend = "uv_build"
