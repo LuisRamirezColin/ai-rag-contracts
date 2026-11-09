@@ -89,7 +89,7 @@ forbidden_modules = [
     "pydantic", "pydantic_settings", "sqlalchemy", "asyncpg", "pgvector", "alembic",
     "dagster", "fastapi", "starlette", "httpx", "dependency_injector",
     "boto3", "botocore", "openai", "langchain", "langchain_core", "langchain_openai",
-    "langgraph", "pypdf", "pytesseract",
+    "langgraph", "pypdf", "pytesseract", "voyageai",
 ]
 
 [[tool.importlinter.contracts]]
@@ -100,7 +100,7 @@ forbidden_modules = [
     "pydantic", "pydantic_settings", "sqlalchemy", "asyncpg", "pgvector", "alembic",
     "dagster", "fastapi", "starlette", "httpx", "dependency_injector",
     "boto3", "botocore", "openai", "langchain", "langchain_core", "langchain_openai",
-    "langgraph", "pypdf", "pytesseract",
+    "langgraph", "pypdf", "pytesseract", "voyageai",
 ]
 
 [[tool.importlinter.contracts]]
@@ -114,7 +114,10 @@ allow_indirect_imports = true
 name = "API is read-only on the vector index"
 type = "forbidden"
 source_modules = ["contract_intel_api"]
-forbidden_modules = ["contract_intel.application.ports.outbound.vector_index_writer"]
+forbidden_modules = [
+    "contract_intel.application.ports.outbound.vector_index_writer",
+    "contract_intel.bootstrap.writer",
+]
 
 [[tool.importlinter.contracts]]
 name = "Legacy reference code is never imported"
@@ -130,9 +133,10 @@ modules = ["contract_intel_pipelines", "contract_intel_api"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "--import-mode=importlib -m 'not integration'"
+addopts = "--import-mode=importlib -m 'not integration and not voyage'"
 markers = [
     "integration: needs the docker compose services (Postgres, LocalStack)",
+    "voyage: calls the real Voyage AI API (needs CONTRACT_INTEL_EMBEDDINGS__API_KEY)",
 ]
 pythonpath = ["scripts"]
 testpaths = ["core/tests", "pipelines/tests", "rag_api/tests", "scripts/tests"]

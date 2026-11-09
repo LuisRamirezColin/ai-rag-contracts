@@ -63,3 +63,34 @@ class InconsistentIngestionRecordError(DomainError):
 
     def __init__(self, detail: str) -> None:
         super().__init__(f"Inconsistent ingestion record: {detail}")
+
+
+class InvalidChunkingError(DomainError):
+    """Raised when chunk size or overlap make no sense."""
+
+    def __init__(self, max_chars: int, overlap_chars: int) -> None:
+        super().__init__(
+            "Chunking needs max_chars > 0 and 0 <= overlap_chars < max_chars, "
+            f"got max_chars={max_chars}, overlap_chars={overlap_chars}"
+        )
+
+
+class EmbeddingDimensionMismatchError(DomainError):
+    """Raised when embeddings do not have the dimension the index expects."""
+
+    def __init__(self, expected: int, actual: int) -> None:
+        super().__init__(f"Expected {expected}-dimensional embeddings, got {actual}")
+
+
+class ChunkDocumentMismatchError(DomainError):
+    """Raised when a chunk is written under a document it does not belong to."""
+
+    def __init__(self, expected: str, actual: str) -> None:
+        super().__init__(f"Chunk of document '{actual}' written under '{expected}'")
+
+
+class EmbeddingCountMismatchError(DomainError):
+    """Raised when an embedder returns a different number of vectors than texts."""
+
+    def __init__(self, expected: int, actual: int) -> None:
+        super().__init__(f"Expected {expected} embeddings, got {actual}")

@@ -45,7 +45,8 @@ inward:
 core/src/contract_intel/
   domain/                 Contract, Document, Page, PageRange, Clause, ClauseType,
                           Chunk, Embedding, ScoredChunk, Citation, Answer, UsageRecord,
-                          IngestionStatus, IngestionRecord
+                          IngestionStatus, IngestionRecord, EmbeddingBatch,
+                          TokenPricing; chunking (page-aware chunk_pages)
   application/
     ports/inbound/        what the system offers (one Protocol per module)
     ports/outbound/       what the system needs (one Protocol per module)
@@ -54,9 +55,10 @@ core/src/contract_intel/
     in_memory/            deterministic adapters for tests and offline runs
     cuad/                 CUAD dataset source (local directory)
     s3/                   S3 document storage (boto3)
+    voyage/               Voyage AI embeddings
     pdf/                  pypdf text extractor
     persistence/          SQLAlchemy base, models and repositories
-  bootstrap/              settings + Core/Writer/Reader containers
+  bootstrap/              settings; core.py (shared), writer.py (pipelines), reader.py (API)
 core/migrations/          Alembic (deployment tooling, outside the runtime package)
 pipelines/src/contract_intel_pipelines/   Dagster definitions
 rag_api/src/contract_intel_api/           FastAPI application
@@ -69,19 +71,19 @@ rag_api/src/contract_intel_api/           FastAPI application
 | `DiscoverDocuments` | inbound | Source documents not ingested yet | — | `DiscoverDocumentsUseCase` ✓ |
 | `IngestDocument` | inbound | Store, extract and record one document | — | `IngestDocumentUseCase` ✓ |
 | `ExtractClauses` | inbound | Extract and persist typed clauses | — | use case |
-| `VectorizeDocument` | inbound | Chunk, embed and index a document | — | use case |
+| `VectorizeDocument` | inbound | Chunk, embed and index a document | — | `VectorizeDocumentUseCase` ✓ |
 | `AnswerQuestion` | inbound | Answer a question with citations | — | use case |
 | `DocumentSource` | outbound | Where documents come from | `InMemoryDocumentSource` | `CuadDocumentSource` ✓ |
 | `DocumentStorage` | outbound | Durable raw files | `InMemoryDocumentStorage` | `S3DocumentStorage` ✓ |
 | `TextExtractor` | outbound | Per-page text (no OCR) | `InMemoryTextExtractor` | `PypdfTextExtractor` ✓ |
 | `DocumentRepository` | outbound | Ingestion state and page text | `InMemoryDocumentRepository` | `SqlAlchemyDocumentRepository` ✓ |
 | `ClauseExtractor` | outbound | Typed clauses from pages | `InMemoryClauseExtractor` | LangGraph map-reduce |
-| `Embedder` | outbound | Text → vectors | `InMemoryEmbedder` | OpenAI embeddings |
-| `VectorIndexWriter` | outbound | Write side of the index (pipelines only) | `InMemoryVectorIndexWriter` | pgvector |
+| `Embedder` | outbound | Document and query vectors | `InMemoryEmbedder` | `VoyageEmbedder` (`voyage-law-2`) ✓ |
+| `VectorIndexWriter` | outbound | Write side of the index (pipelines only) | `InMemoryVectorIndexWriter` | `PgVectorIndexWriter` ✓ |
 | `VectorSearch` | outbound | Read side of the index (API only) | `InMemoryVectorSearch` | pgvector |
 | `ContractRepository` | outbound | Contract aggregates | `InMemoryContractRepository` | Postgres |
-| `AnswerGenerator` | outbound | Grounded answer from context | `InMemoryAnswerGenerator` | OpenAI chat |
-| `UsageTracker` | outbound | Token and cost accounting | `InMemoryUsageTracker` | Postgres |
+| `AnswerGenerator` | outbound | Grounded answer from context | `InMemoryAnswerGenerator` | Claude (Anthropic SDK) |
+| `UsageTracker` | outbound | Token and cost accounting | `InMemoryUsageTracker` | `SqlAlchemyUsageTracker` ✓ |
 
 ## Document ingestion flow
 
@@ -110,6 +112,23 @@ sequenceDiagram
 
 See [ADR 0005](adr/0005-per-document-ingestion-with-dynamic-partitions.md).
 
+## Vectorization flow
+
+The same Dagster run continues with the `indexed_document` asset once ingestion
+succeeds (it is skipped when ingestion fails):
+
+```mermaid
+flowchart LR
+  R[DocumentRepository.get_pages] --> C["chunk_pages (domain)"]
+  C --> E[Embedder.embed_documents]
+  E --> W[VectorIndexWriter.replace_document]
+  E --> U[UsageTracker.record]
+```
+
+Embeddings are computed before the index is touched, and the writer replaces a
+document's chunks in one transaction. See
+[ADR 0007](adr/0007-embeddings-with-voyage-and-pgvector.md).
+
 ## SOLID map
 
 | Principle | Where it shows |
@@ -129,7 +148,7 @@ See [ADR 0005](adr/0005-per-document-ingestion-with-dynamic-partitions.md).
 3. Write the use case against the port and test it with the in-memory adapter.
 4. Implement the production adapter in `adapters/outbound/<technology>/` and run the
    same behaviour tests against it (contract tests).
-5. Wire it in `bootstrap/containers.py` as the `real` branch of the port's `Selector`
+5. Wire it in `bootstrap/core.py`, `writer.py` or `reader.py` as the `real` branch of the port's `Selector`
    (writer, reader or shared core); see
    [ADR 0006](adr/0006-lazy-per-port-adapter-selection.md).
 6. If the adapter brings a new SDK, add it to the framework-free lists in
@@ -143,3 +162,4 @@ See [ADR 0005](adr/0005-per-document-ingestion-with-dynamic-partitions.md).
 - [ADR 0004 — Executable architecture rules](adr/0004-executable-architecture-rules.md)
 - [ADR 0005 — Per-document ingestion with dynamic partitions](adr/0005-per-document-ingestion-with-dynamic-partitions.md)
 - [ADR 0006 — Lazy, per-port adapter selection](adr/0006-lazy-per-port-adapter-selection.md)
+- [ADR 0007 — Embeddings with Voyage AI, index in pgvector](adr/0007-embeddings-with-voyage-and-pgvector.md)

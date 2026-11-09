@@ -6,16 +6,16 @@ from dagster import DagsterInstance, build_sensor_context, materialize
 from contract_intel.adapters.outbound.in_memory.document_source import (
     InMemoryDocumentSource,
 )
-from contract_intel.bootstrap.containers import build_writer_container
 from contract_intel.bootstrap.settings import AppSettings
+from contract_intel.bootstrap.writer import build_writer_container
 from contract_intel.domain.document import Document, DocumentType
 from contract_intel.domain.ids import ContractId, DocumentId
 from contract_intel.domain.ingestion import IngestionStatus
+from contract_intel_pipelines.automation import pending_documents_sensor
 from contract_intel_pipelines.definitions import CONTAINER_RESOURCE_KEY
 from contract_intel_pipelines.ingestion import (
     DOCUMENTS_PARTITIONS_NAME,
     ingested_document,
-    pending_documents_sensor,
 )
 
 WITH_TEXT = DocumentId("with-text")

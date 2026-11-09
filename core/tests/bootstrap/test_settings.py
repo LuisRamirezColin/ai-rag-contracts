@@ -56,3 +56,31 @@ def test_storage_credentials_are_secret(monkeypatch):
     settings = AppSettings(_env_file=None)
     assert settings.storage.secret_access_key is not None
     assert "s3-secret" not in repr(settings)
+
+
+def test_embedding_and_chunking_defaults(monkeypatch):
+    for name in ("MODEL", "DIMENSIONS", "API_KEY"):
+        monkeypatch.delenv(f"CONTRACT_INTEL_EMBEDDINGS__{name}", raising=False)
+    settings = AppSettings(_env_file=None)
+    assert settings.embeddings.model == "voyage-law-2"
+    assert settings.embeddings.dimensions == 1024
+    assert settings.chunking.max_chars == 2000
+    assert settings.chunking.overlap_chars == 200
+
+
+def test_embeddings_from_environment_keep_key_secret(monkeypatch):
+    monkeypatch.setenv("CONTRACT_INTEL_EMBEDDINGS__API_KEY", "voyage-secret")
+    monkeypatch.setenv("CONTRACT_INTEL_CHUNKING__MAX_CHARS", "1500")
+
+    settings = AppSettings(_env_file=None)
+
+    assert settings.embeddings.api_key.get_secret_value() == "voyage-secret"
+    assert "voyage-secret" not in repr(settings)
+    assert settings.chunking.max_chars == 1500
+
+
+def test_overlap_must_be_smaller_than_window(monkeypatch):
+    monkeypatch.setenv("CONTRACT_INTEL_CHUNKING__MAX_CHARS", "200")
+    monkeypatch.setenv("CONTRACT_INTEL_CHUNKING__OVERLAP_CHARS", "200")
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None)

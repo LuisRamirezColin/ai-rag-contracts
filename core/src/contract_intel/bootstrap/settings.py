@@ -1,11 +1,25 @@
 from pathlib import Path
+from typing import Self
 
-from pydantic import BaseModel, PositiveInt, SecretStr
+from pydantic import (
+    BaseModel,
+    NonNegativeInt,
+    PositiveFloat,
+    PositiveInt,
+    SecretStr,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_PREFIX = "CONTRACT_INTEL_"
 DEFAULT_CUAD_DIR = Path("data/cuad/CUAD_v1/full_contract_pdf")
 DEFAULT_MAX_DOCUMENTS = 5
+DEFAULT_EMBEDDING_MODEL = "voyage-law-2"
+DEFAULT_EMBEDDING_DIMENSIONS = 1024
+DEFAULT_EMBEDDING_PRICE_PER_MILLION_TOKENS = 0.12
+DEFAULT_EMBEDDING_MAX_RETRIES = 3
+DEFAULT_CHUNK_MAX_CHARS = 2000
+DEFAULT_CHUNK_OVERLAP_CHARS = 200
 
 
 class DatabaseSettings(BaseModel):
@@ -30,7 +44,6 @@ class LlmSettings(BaseModel):
 
     api_key: SecretStr = SecretStr("")
     chat_model: str = "gpt-4o-mini"
-    embedding_model: str = "text-embedding-3-small"
 
 
 class IngestionSettings(BaseModel):
@@ -38,6 +51,29 @@ class IngestionSettings(BaseModel):
 
     cuad_dir: Path = DEFAULT_CUAD_DIR
     max_documents: PositiveInt = DEFAULT_MAX_DOCUMENTS
+
+
+class EmbeddingsSettings(BaseModel):
+    """Embedding model used to index chunks and encode queries."""
+
+    api_key: SecretStr = SecretStr("")
+    model: str = DEFAULT_EMBEDDING_MODEL
+    dimensions: PositiveInt = DEFAULT_EMBEDDING_DIMENSIONS
+    price_per_million_tokens: PositiveFloat = DEFAULT_EMBEDDING_PRICE_PER_MILLION_TOKENS
+    max_retries: NonNegativeInt = DEFAULT_EMBEDDING_MAX_RETRIES
+
+
+class ChunkingSettings(BaseModel):
+    """Size of the text windows that become retrievable chunks."""
+
+    max_chars: PositiveInt = DEFAULT_CHUNK_MAX_CHARS
+    overlap_chars: NonNegativeInt = DEFAULT_CHUNK_OVERLAP_CHARS
+
+    @model_validator(mode="after")
+    def _overlap_smaller_than_window(self) -> Self:
+        if self.overlap_chars >= self.max_chars:
+            raise ValueError("overlap_chars must be smaller than max_chars")
+        return self
 
 
 class AppSettings(BaseSettings):
@@ -58,3 +94,5 @@ class AppSettings(BaseSettings):
     storage: StorageSettings = StorageSettings()
     llm: LlmSettings = LlmSettings()
     ingestion: IngestionSettings = IngestionSettings()
+    embeddings: EmbeddingsSettings = EmbeddingsSettings()
+    chunking: ChunkingSettings = ChunkingSettings()

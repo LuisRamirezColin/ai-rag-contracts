@@ -9,10 +9,11 @@ termination rights, liability caps, exclusivity, renewal terms. This project tur
 contract corpus into **structured clause data** you can filter, and lets you **ask
 questions** whose answers cite the exact document and page they come from.
 
-- **Writer side (Dagster):** ingests contracts, extracts typed clauses with an LLM
-  graph, embeds chunks and continuously feeds a pgvector index.
-- **Reader side (FastAPI):** answers questions by combining clause-type filters with
-  vector similarity, and grounds every answer in citations.
+- **Writer side (Dagster):** ingests contracts, embeds page-aware chunks with Voyage
+  AI and continuously feeds a pgvector index; typed clause extraction with Claude
+  comes next.
+- **Reader side (FastAPI):** answers questions with Claude from the chunks retrieved
+  by vector similarity (plus clause-type filters), citing document and page.
 - **Data:** the public [CUAD](https://www.atticusprojectai.org/cuad) dataset (510
   commercial contracts), which also provides lawyer-labelled ground truth for
   evaluation.
@@ -23,9 +24,9 @@ questions** whose answers cite the exact document and page they come from.
 |---|---|
 | Hexagonal skeleton, executable architecture rules, CI | Done |
 | Document ingestion: CUAD → S3 + per-page text in Postgres, Dagster sensor | Done |
-| Clause extraction: LangGraph over pages, typed CUAD clauses, cost tracking | Next |
-| Vectorization: chunking, embeddings, pgvector index | Planned |
-| RAG API: hybrid retrieval, grounded answers with page citations | Planned |
+| Vectorization: page-aware chunks, Voyage `voyage-law-2` embeddings, pgvector index | Done |
+| RAG API: retrieval in pgvector, grounded answers with Claude and page citations | Next |
+| Clause extraction: LangGraph over pages with Claude, typed CUAD clauses | Planned |
 | Evaluation against CUAD labels (precision/recall per clause type) | Planned |
 
 Each stage is an [OpenSpec](openspec/) change with its proposal, design, spec and
@@ -79,7 +80,22 @@ edges, wired in a single composition root.
      stop other documents.
 4. Re-ingesting is idempotent: state and pages are replaced, never duplicated.
 
-### Clause extraction (next)
+### Vectorization (implemented)
+
+In the same Dagster run, once ingestion succeeds, the `indexed_document` asset calls
+`VectorizeDocument`:
+
+1. splits the page text into windows of at most 2,000 characters with 200 of
+   overlap, cut at paragraph, line or word boundaries; each chunk keeps the page
+   range it covers, so answers can cite pages;
+2. embeds the chunks with Voyage AI `voyage-law-2`, a retrieval model trained on
+   legal text (Anthropic offers no embeddings model; queries use the same model with
+   the query input type);
+3. replaces the document's chunks in pgvector in one transaction (HNSW cosine
+   index), so a reader never sees a half-indexed document;
+4. records tokens and estimated cost per document in `usage_records`.
+
+### Clause extraction (planned)
 
 A LangGraph workflow reads the stored pages and returns clauses typed with the CUAD
 taxonomy (governing law, termination for convenience, cap on liability, renewal
@@ -87,11 +103,11 @@ term, exclusivity, most favored nation, non-compete, IP assignment, price and vo
 restrictions). Outputs are schema-validated, each clause keeps its page range, and
 token usage and cost are recorded per document.
 
-### Retrieval and answers (planned)
+### Retrieval and answers (next)
 
-Pages are chunked and embedded into pgvector. The API filters by clause type and
-metadata in SQL, ranks by vector similarity in the same Postgres, and generates an
-answer only from the retrieved context, citing document and page.
+The API embeds the question, ranks chunks by vector similarity in pgvector (with
+clause-type filters once clauses exist), and asks Claude to answer only from the
+retrieved chunks, citing document and page.
 
 ## Engineering highlights
 
@@ -150,7 +166,8 @@ See [ADR 0002](docs/architecture/adr/0002-uv-workspace-monorepo.md).
 | Persistence | SQLAlchemy 2 async, Alembic |
 | Documents | pypdf |
 | Wiring | dependency-injector, pydantic-settings |
-| LLM layer | LangGraph, OpenAI (arrives with clause extraction) |
+| Embeddings | Voyage AI `voyage-law-2` (1024 dimensions) |
+| LLM layer | Claude via the Anthropic SDK, LangGraph (arrive with the RAG API and clause extraction) |
 | Architecture rules | import-linter |
 | Planning | OpenSpec |
 
@@ -160,12 +177,13 @@ Requirements: [uv](https://docs.astral.sh/uv/), Docker with Compose.
 
 ```bash
 uv sync --all-packages                   # Python 3.12 + all workspace packages
-cp .env.example .env
+cp .env.example .env                     # then set CONTRACT_INTEL_EMBEDDINGS__API_KEY
 uv run python scripts/download_cuad.py   # CUAD v1 (~100 MB, SHA-256 verified) into data/cuad/
 docker compose up -d --wait              # Postgres + pgvector, LocalStack S3
-uv run alembic upgrade head              # vector extension, documents and pages tables
+uv run alembic upgrade head              # vector extension; documents, pages, chunks, usage_records
 uv run pytest                            # unit, contract (fakes) and architecture tests
 uv run pytest -m integration             # contract tests against Postgres and LocalStack
+uv run pytest -m voyage                  # one real call to Voyage AI (skipped without a key)
 ```
 
 > `pytest -m integration` truncates the `documents` table of the local database.
@@ -186,7 +204,41 @@ Inspect the result:
 docker compose exec postgres psql -U contract_intel -c \
   "SELECT status, count(*), sum(page_count) FROM documents GROUP BY status"
 docker compose exec localstack awslocal s3 ls s3://contracts/raw/
+docker compose exec postgres psql -U contract_intel -c \
+  "SELECT document_id, count(*) AS chunks, min(first_page), max(last_page) FROM chunks GROUP BY document_id"
+docker compose exec postgres psql -U contract_intel -c \
+  "SELECT operation, model, sum(input_tokens) AS tokens, sum(cost_usd) AS usd FROM usage_records GROUP BY 1, 2"
 ```
+
+A contract of about ten pages takes 6K–10K Voyage tokens; the 5 demo contracts about
+60K and all of CUAD roughly 9M, within the 50M free tokens Voyage gives every account
+for `voyage-law-2`. `usage_records` shows the estimate at list price ($0.12 per
+million tokens).
+
+## Running on free tiers
+
+This demo runs entirely on free tiers, and that shapes what you see:
+
+- **Voyage AI without a payment method** is limited to **3 requests and 10K tokens
+  per minute**. Dagster launches one run per document in parallel, so most runs hit
+  the limit, and a contract larger than ~10K tokens (about 12+ pages) cannot be
+  embedded at all, because its chunks go in one request. In the reference run, 3 of
+  the 5 demo contracts were indexed (43 chunks, 23K tokens, $0 billed); the other
+  two failed with `RateLimitError`, stayed visible as failed runs in Dagster and left
+  the index untouched, as designed.
+- The **free token allowance** (50M tokens for `voyage-law-2`) still applies once a
+  payment method is added, so the whole CUAD corpus costs nothing either way.
+
+### How to lift the limits
+
+| Improvement | Effort | Effect |
+|---|---|---|
+| Add a payment method in the [Voyage dashboard](https://dashboard.voyageai.com/) | none (config) | Standard rate limits within minutes; free tokens still apply. Re-materialize the failed `indexed_document` partitions in Dagster. |
+| Cap concurrent runs (Dagster `QueuedRunCoordinator` `max_concurrent_runs`, or a tag concurrency limit on `ingest_documents_job`) | small | Avoids request bursts when many documents arrive at once |
+| Token-aware throttling in `VoyageEmbedder` (smaller batches plus a requests/tokens-per-minute limiter) | medium | Works within any rate limit, including the free one, at the cost of throughput; confined to the adapter |
+| Retry policy with backoff on `indexed_document` for `RateLimitError` | small | Transient limit hits recover without manual re-runs |
+| Voyage Batch API for bulk backfills | medium | 33% cheaper and asynchronous, suited to indexing all 510 contracts |
+| Another provider or a local model behind the `Embedder` port | medium | No external limits; one adapter, settings and a new migration if the dimension changes ([ADR 0007](docs/architecture/adr/0007-embeddings-with-voyage-and-pgvector.md)) |
 
 ## Configuration
 
@@ -200,7 +252,10 @@ Settings are read from `CONTRACT_INTEL_*` variables or `.env` (see
 | `CONTRACT_INTEL_INGESTION__CUAD_DIR` | `data/cuad/CUAD_v1/full_contract_pdf` | Local CUAD PDFs |
 | `CONTRACT_INTEL_DATABASE__URL` | local Postgres | Async SQLAlchemy URL |
 | `CONTRACT_INTEL_STORAGE__BUCKET` / `__ENDPOINT_URL` | `contracts` / LocalStack | Where originals are stored |
-| `CONTRACT_INTEL_LLM__API_KEY` | empty | LLM provider key (clause extraction onwards) |
+| `CONTRACT_INTEL_EMBEDDINGS__API_KEY` | empty | Voyage AI key ([dashboard](https://dash.voyageai.com/)) |
+| `CONTRACT_INTEL_EMBEDDINGS__MODEL` / `__DIMENSIONS` | `voyage-law-2` / `1024` | Embedding model; the dimension must match migration `0003` |
+| `CONTRACT_INTEL_CHUNKING__MAX_CHARS` / `__OVERLAP_CHARS` | `2000` / `200` | Chunk size and overlap |
+| `CONTRACT_INTEL_LLM__API_KEY` | empty | LLM provider key (RAG API onwards) |
 
 ## Testing strategy
 
@@ -208,7 +263,7 @@ Settings are read from `CONTRACT_INTEL_*` variables or `.env` (see
 |---|---|---|
 | Domain | Invariants of entities and value objects | nothing |
 | Use cases | Business behaviour, using in-memory fakes of every port | nothing |
-| Contract | Fake and real adapter behave the same (LSP) | Docker for S3/Postgres cases (`-m integration`) |
+| Contract | Fake and real adapter behave the same (LSP) | Docker for S3/Postgres cases (`-m integration`); a Voyage key for `-m voyage` |
 | Architecture | Import contracts hold; a forbidden import makes them fail | nothing |
 | Pipelines | Sensor scheduling and asset outcomes with an ephemeral Dagster instance | nothing |
 
@@ -229,7 +284,7 @@ separate job runs the integration tests against Postgres and LocalStack services
 
 | Path | Contents |
 |---|---|
-| `core/` | `contract_intel`: domain, application (ports and use cases), adapters, composition root |
+| `core/` | `contract_intel`: domain, application (ports and use cases), adapters, composition root (`bootstrap/core.py`, `writer.py`, `reader.py`) |
 | `pipelines/` | `contract_intel_pipelines`: Dagster inbound adapter (writer) |
 | `rag_api/` | `contract_intel_api`: FastAPI inbound adapter (reader) |
 | `core/migrations/` | Alembic migrations |

@@ -1,6 +1,7 @@
 import socket
 
 import pytest
+from sqlalchemy.pool import NullPool
 
 from contract_intel.adapters.outbound.in_memory.document_source import (
     InMemoryDocumentSource,
@@ -9,24 +10,25 @@ from contract_intel.application.ports.inbound.discover_documents import (
     DiscoverDocuments,
 )
 from contract_intel.application.ports.inbound.ingest_document import IngestDocument
+from contract_intel.application.ports.inbound.vectorize_document import (
+    VectorizeDocument,
+)
 from contract_intel.application.ports.outbound.document_repository import (
     DocumentRepository,
 )
 from contract_intel.application.ports.outbound.document_source import DocumentSource
 from contract_intel.application.ports.outbound.document_storage import DocumentStorage
+from contract_intel.application.ports.outbound.embedder import Embedder
 from contract_intel.application.ports.outbound.text_extractor import TextExtractor
+from contract_intel.application.ports.outbound.usage_tracker import UsageTracker
 from contract_intel.application.ports.outbound.vector_index_writer import (
     VectorIndexWriter,
 )
 from contract_intel.application.ports.outbound.vector_search import VectorSearch
-from contract_intel.bootstrap.containers import (
-    ReaderContainer,
-    RealAdaptersUnavailableError,
-    WriterContainer,
-    build_reader_container,
-    build_writer_container,
-)
+from contract_intel.bootstrap.core import RealAdaptersUnavailableError
+from contract_intel.bootstrap.reader import ReaderContainer, build_reader_container
 from contract_intel.bootstrap.settings import AppSettings
+from contract_intel.bootstrap.writer import WriterContainer, build_writer_container
 from contract_intel.domain.document import Document, DocumentType
 from contract_intel.domain.ids import ContractId, DocumentId
 from contract_intel.domain.ingestion import IngestionStatus
@@ -37,7 +39,13 @@ INGESTION_PORTS = {
     "text_extractor": TextExtractor,
     "document_repository": DocumentRepository,
 }
-NOT_YET_REAL_WRITER_PORTS = ["clause_extractor", "vector_index_writer"]
+REAL_WRITER_PORTS = {
+    **INGESTION_PORTS,
+    "vector_index_writer": VectorIndexWriter,
+}
+REAL_CORE_PORTS = {"embedder": Embedder, "usage_tracker": UsageTracker}
+NOT_YET_REAL_WRITER_PORTS = ["clause_extractor"]
+NOT_YET_REAL_CORE_PORTS = ["contract_repository"]
 NOT_YET_REAL_READER_PORTS = ["vector_search", "answer_generator"]
 
 
@@ -65,7 +73,7 @@ def _resolve_all(container):
     for name, provider in container.providers.items():
         if name == "core":
             resolved.extend(_resolve_all(container.core))
-        elif name not in {"settings", "mode"}:
+        elif name not in {"settings", "mode", "use_null_pool"}:
             resolved.append(provider())
     return resolved
 
@@ -90,8 +98,14 @@ def test_only_the_writer_container_declares_an_index_writer():
     assert "vector_index_writer" not in ReaderContainer.providers
 
 
-def test_reader_container_exposes_no_ingestion():
-    for name in [*INGESTION_PORTS, "discover_documents", "ingest_document"]:
+def test_reader_container_exposes_no_ingestion_or_index_writes():
+    writer_only = [
+        *REAL_WRITER_PORTS,
+        "discover_documents",
+        "ingest_document",
+        "vectorize_document",
+    ]
+    for name in writer_only:
         assert name not in ReaderContainer.providers
 
 
@@ -101,14 +115,34 @@ def test_writer_exposes_ingestion_use_cases(fake_settings):
     assert isinstance(container.ingest_document(), IngestDocument)
 
 
-def test_real_ingestion_adapters_resolve_without_network(no_network, real_settings):
+def test_real_adapters_resolve_without_network(no_network, real_settings):
     container = build_writer_container(real_settings)
 
-    for name, port in INGESTION_PORTS.items():
+    for name, port in REAL_WRITER_PORTS.items():
         adapter = getattr(container, name)()
         assert isinstance(adapter, port)
         assert "InMemory" not in type(adapter).__name__
+    for name, port in REAL_CORE_PORTS.items():
+        adapter = getattr(container.core, name)()
+        assert isinstance(adapter, port)
+        assert "InMemory" not in type(adapter).__name__
     assert isinstance(container.ingest_document(), IngestDocument)
+    assert isinstance(container.vectorize_document(), VectorizeDocument)
+
+
+def test_writer_engine_uses_null_pool_and_reader_a_pool(real_settings):
+    writer_engine = build_writer_container(real_settings).core.database_engine()
+    reader_engine = build_reader_container(real_settings).core.database_engine()
+
+    assert isinstance(writer_engine.pool, NullPool)
+    assert not isinstance(reader_engine.pool, NullPool)
+
+
+@pytest.mark.parametrize("port_name", NOT_YET_REAL_CORE_PORTS)
+def test_core_ports_without_real_adapter_fail_on_resolution(real_settings, port_name):
+    container = build_writer_container(real_settings)
+    with pytest.raises(RealAdaptersUnavailableError, match=port_name):
+        getattr(container.core, port_name)()
 
 
 @pytest.mark.parametrize("port_name", NOT_YET_REAL_WRITER_PORTS)
@@ -138,6 +172,12 @@ async def test_discover_and_ingest_end_to_end_with_fakes(no_network, fake_settin
     pending = await container.discover_documents().execute()
     record = await container.ingest_document().execute(pending[0])
 
+    chunk_count = await container.vectorize_document().execute(document_id)
+
     assert pending == (document_id,)
     assert record.status is IngestionStatus.INGESTED
     assert await container.discover_documents().execute() == ()
+    assert chunk_count == 1
+    assert len(container.core.vector_store().entries) == 1
+    (usage,) = container.core.usage_tracker().records
+    assert usage.document_id == document_id

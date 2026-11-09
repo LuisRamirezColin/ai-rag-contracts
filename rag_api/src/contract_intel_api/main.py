@@ -6,7 +6,7 @@ they never import outbound adapters directly.
 
 from fastapi import FastAPI
 
-from contract_intel.bootstrap.containers import ReaderContainer, build_reader_container
+from contract_intel.bootstrap.reader import ReaderContainer, build_reader_container
 from contract_intel_api.health import router as health_router
 
 API_TITLE = "Contract Intelligence API"

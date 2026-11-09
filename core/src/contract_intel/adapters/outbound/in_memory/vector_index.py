@@ -4,6 +4,7 @@ from collections.abc import Sequence
 from contract_intel.domain.chunk import EmbeddedChunk, Embedding, ScoredChunk
 from contract_intel.domain.clause_type import ClauseType
 from contract_intel.domain.ids import ChunkId, DocumentId
+from contract_intel.domain.index_rules import ensure_writable
 
 
 class InMemoryVectorStore:
@@ -22,11 +23,24 @@ def _cosine_similarity(a: Embedding, b: Embedding) -> float:
 class InMemoryVectorIndexWriter:
     """Write side of the in-memory vector index."""
 
-    def __init__(self, store: InMemoryVectorStore) -> None:
+    def __init__(
+        self, store: InMemoryVectorStore, dimensions: int | None = None
+    ) -> None:
         self._store = store
+        self._dimensions = dimensions
 
-    async def upsert(self, chunks: Sequence[EmbeddedChunk]) -> None:
-        """Insert or replace ``chunks`` by chunk id."""
+    async def replace_document(
+        self, document_id: DocumentId, chunks: Sequence[EmbeddedChunk]
+    ) -> None:
+        """Replace every chunk of ``document_id`` with ``chunks``.
+
+        Raises:
+            ChunkDocumentMismatchError: If a chunk belongs to another document.
+            EmbeddingDimensionMismatchError: If ``dimensions`` was given and a
+                vector does not have it.
+        """
+        ensure_writable(document_id, chunks, self._dimensions)
+        await self.delete_document(document_id)
         for embedded in chunks:
             self._store.entries[embedded.chunk.id] = embedded
 
