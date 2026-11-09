@@ -84,3 +84,43 @@ def test_overlap_must_be_smaller_than_window(monkeypatch):
     monkeypatch.setenv("CONTRACT_INTEL_CHUNKING__OVERLAP_CHARS", "200")
     with pytest.raises(ValidationError):
         AppSettings(_env_file=None)
+
+
+def test_llm_and_retrieval_defaults(monkeypatch):
+    for name in ("CHAT_MODEL", "FALLBACKS", "EFFORT", "API_KEY"):
+        monkeypatch.delenv(f"CONTRACT_INTEL_LLM__{name}", raising=False)
+    monkeypatch.delenv("CONTRACT_INTEL_RETRIEVAL__TOP_K", raising=False)
+    settings = AppSettings(_env_file=None)
+    assert settings.llm.chat_model == "claude-sonnet-5-5"
+    assert settings.llm.fallbacks is False
+    assert settings.llm.effort == "medium"
+    assert settings.llm.input_price_per_million == 2.0
+    assert settings.llm.output_price_per_million == 10.0
+    assert settings.retrieval.top_k == 8
+
+
+def test_llm_from_environment(monkeypatch):
+    monkeypatch.setenv("CONTRACT_INTEL_LLM__CHAT_MODEL", "claude-opus-5-5")
+    monkeypatch.setenv("CONTRACT_INTEL_LLM__EFFORT", "high")
+    monkeypatch.setenv("CONTRACT_INTEL_LLM__FALLBACKS", "true")
+    monkeypatch.setenv("CONTRACT_INTEL_LLM__API_KEY", "sk-test-secret")
+
+    settings = AppSettings(_env_file=None)
+
+    assert settings.llm.chat_model == "claude-opus-5-5"
+    assert settings.llm.effort == "high"
+    assert settings.llm.fallbacks is True
+    assert "sk-test-secret" not in repr(settings)
+
+
+@pytest.mark.parametrize(
+    ("variable", "value"),
+    [
+        ("CONTRACT_INTEL_LLM__EFFORT", "extreme"),
+        ("CONTRACT_INTEL_RETRIEVAL__TOP_K", "0"),
+    ],
+)
+def test_invalid_llm_or_retrieval_values(monkeypatch, variable, value):
+    monkeypatch.setenv(variable, value)
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None)

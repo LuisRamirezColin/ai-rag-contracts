@@ -94,3 +94,28 @@ class EmbeddingCountMismatchError(DomainError):
 
     def __init__(self, expected: int, actual: int) -> None:
         super().__init__(f"Expected {expected} embeddings, got {actual}")
+
+
+class ProviderRateLimitedError(DomainError):
+    """Raised when an external model provider rejects a call for rate limits."""
+
+    def __init__(self, provider: str, detail: str) -> None:
+        super().__init__(f"{provider} rate limit exceeded: {detail}")
+        self.provider = provider
+
+
+class ProviderUnavailableError(DomainError):
+    """Raised when an external model provider cannot be reached or fails."""
+
+    def __init__(self, provider: str, detail: str) -> None:
+        super().__init__(f"{provider} is unavailable: {detail}")
+        self.provider = provider
+
+
+class AnswerRefusedError(DomainError):
+    """Raised when the answer model declines to answer a question."""
+
+    def __init__(self, category: str | None) -> None:
+        reason = f" (category: {category})" if category else ""
+        super().__init__(f"The model declined to answer{reason}")
+        self.category = category

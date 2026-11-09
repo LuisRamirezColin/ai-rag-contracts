@@ -6,6 +6,7 @@ from sqlalchemy.pool import NullPool
 from contract_intel.adapters.outbound.in_memory.document_source import (
     InMemoryDocumentSource,
 )
+from contract_intel.application.ports.inbound.answer_question import AnswerQuestion
 from contract_intel.application.ports.inbound.discover_documents import (
     DiscoverDocuments,
 )
@@ -13,6 +14,7 @@ from contract_intel.application.ports.inbound.ingest_document import IngestDocum
 from contract_intel.application.ports.inbound.vectorize_document import (
     VectorizeDocument,
 )
+from contract_intel.application.ports.outbound.answer_generator import AnswerGenerator
 from contract_intel.application.ports.outbound.document_repository import (
     DocumentRepository,
 )
@@ -46,7 +48,10 @@ REAL_WRITER_PORTS = {
 REAL_CORE_PORTS = {"embedder": Embedder, "usage_tracker": UsageTracker}
 NOT_YET_REAL_WRITER_PORTS = ["clause_extractor"]
 NOT_YET_REAL_CORE_PORTS = ["contract_repository"]
-NOT_YET_REAL_READER_PORTS = ["vector_search", "answer_generator"]
+REAL_READER_PORTS = {
+    "vector_search": VectorSearch,
+    "answer_generator": AnswerGenerator,
+}
 
 
 @pytest.fixture
@@ -152,11 +157,36 @@ def test_writer_ports_without_real_adapter_fail_on_resolution(real_settings, por
         getattr(container, port_name)()
 
 
-@pytest.mark.parametrize("port_name", NOT_YET_REAL_READER_PORTS)
-def test_reader_ports_without_real_adapter_fail_on_resolution(real_settings, port_name):
+def test_real_reader_adapters_resolve_without_network(no_network, real_settings):
     container = build_reader_container(real_settings)
-    with pytest.raises(RealAdaptersUnavailableError, match=port_name):
-        getattr(container, port_name)()
+
+    for name, port in REAL_READER_PORTS.items():
+        adapter = getattr(container, name)()
+        assert isinstance(adapter, port)
+        assert "InMemory" not in type(adapter).__name__
+    assert isinstance(container.answer_question(), AnswerQuestion)
+
+
+async def test_question_end_to_end_with_fakes(no_network, fake_settings):
+    document_id = DocumentId("contract-1")
+    document = Document(
+        document_id, ContractId("contract-1"), "Contract", DocumentType.OTHER
+    )
+    writer = build_writer_container(fake_settings)
+    writer.document_source.override(
+        InMemoryDocumentSource(
+            {document_id: (document, b"Governed by the laws of Delaware.")}
+        )
+    )
+    await writer.ingest_document().execute(document_id)
+    await writer.vectorize_document().execute(document_id)
+    reader = build_reader_container(fake_settings)
+    reader.core.vector_store.override(writer.core.vector_store())
+
+    answer = await reader.answer_question().execute("Which law governs?")
+
+    assert [c.document_id for c in answer.citations] == [document_id]
+    assert "Delaware" in answer.text
 
 
 async def test_discover_and_ingest_end_to_end_with_fakes(no_network, fake_settings):

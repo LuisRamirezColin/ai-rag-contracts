@@ -56,6 +56,7 @@ core/src/contract_intel/
     cuad/                 CUAD dataset source (local directory)
     s3/                   S3 document storage (boto3)
     voyage/               Voyage AI embeddings
+    anthropic/            Claude answer generation (citations)
     pdf/                  pypdf text extractor
     persistence/          SQLAlchemy base, models and repositories
   bootstrap/              settings; core.py (shared), writer.py (pipelines), reader.py (API)
@@ -72,7 +73,7 @@ rag_api/src/contract_intel_api/           FastAPI application
 | `IngestDocument` | inbound | Store, extract and record one document | — | `IngestDocumentUseCase` ✓ |
 | `ExtractClauses` | inbound | Extract and persist typed clauses | — | use case |
 | `VectorizeDocument` | inbound | Chunk, embed and index a document | — | `VectorizeDocumentUseCase` ✓ |
-| `AnswerQuestion` | inbound | Answer a question with citations | — | use case |
+| `AnswerQuestion` | inbound | Answer a question with citations | — | `AnswerQuestionUseCase` ✓ |
 | `DocumentSource` | outbound | Where documents come from | `InMemoryDocumentSource` | `CuadDocumentSource` ✓ |
 | `DocumentStorage` | outbound | Durable raw files | `InMemoryDocumentStorage` | `S3DocumentStorage` ✓ |
 | `TextExtractor` | outbound | Per-page text (no OCR) | `InMemoryTextExtractor` | `PypdfTextExtractor` ✓ |
@@ -80,9 +81,9 @@ rag_api/src/contract_intel_api/           FastAPI application
 | `ClauseExtractor` | outbound | Typed clauses from pages | `InMemoryClauseExtractor` | LangGraph map-reduce |
 | `Embedder` | outbound | Document and query vectors | `InMemoryEmbedder` | `VoyageEmbedder` (`voyage-law-2`) ✓ |
 | `VectorIndexWriter` | outbound | Write side of the index (pipelines only) | `InMemoryVectorIndexWriter` | `PgVectorIndexWriter` ✓ |
-| `VectorSearch` | outbound | Read side of the index (API only) | `InMemoryVectorSearch` | pgvector |
+| `VectorSearch` | outbound | Read side of the index (API only) | `InMemoryVectorSearch` | `PgVectorSearch` ✓ |
 | `ContractRepository` | outbound | Contract aggregates | `InMemoryContractRepository` | Postgres |
-| `AnswerGenerator` | outbound | Grounded answer from context | `InMemoryAnswerGenerator` | Claude (Anthropic SDK) |
+| `AnswerGenerator` | outbound | Grounded answer from context | `InMemoryAnswerGenerator` | `AnthropicAnswerGenerator` (Claude, citations) ✓ |
 | `UsageTracker` | outbound | Token and cost accounting | `InMemoryUsageTracker` | `SqlAlchemyUsageTracker` ✓ |
 
 ## Document ingestion flow
@@ -129,6 +130,20 @@ Embeddings are computed before the index is touched, and the writer replaces a
 document's chunks in one transaction. See
 [ADR 0007](adr/0007-embeddings-with-voyage-and-pgvector.md).
 
+## Question flow
+
+`POST /ask` embeds the question, retrieves the most similar chunks from pgvector and
+asks Claude to answer from them only; Claude's citations map back to chunks, so every
+citation carries document and page range. See
+[ADR 0008](adr/0008-grounded-answers-with-claude-citations.md).
+
+```mermaid
+flowchart LR
+  Q[POST /ask] --> E[Embedder.embed_query] --> S[VectorSearch.search] --> G[AnswerGenerator.generate]
+  G --> A[answer + citations: document, pages, excerpt]
+  G --> U[UsageTracker.record]
+```
+
 ## SOLID map
 
 | Principle | Where it shows |
@@ -163,3 +178,4 @@ document's chunks in one transaction. See
 - [ADR 0005 — Per-document ingestion with dynamic partitions](adr/0005-per-document-ingestion-with-dynamic-partitions.md)
 - [ADR 0006 — Lazy, per-port adapter selection](adr/0006-lazy-per-port-adapter-selection.md)
 - [ADR 0007 — Embeddings with Voyage AI, index in pgvector](adr/0007-embeddings-with-voyage-and-pgvector.md)
+- [ADR 0008 — Grounded answers with Claude citations](adr/0008-grounded-answers-with-claude-citations.md)

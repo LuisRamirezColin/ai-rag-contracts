@@ -89,7 +89,7 @@ forbidden_modules = [
     "pydantic", "pydantic_settings", "sqlalchemy", "asyncpg", "pgvector", "alembic",
     "dagster", "fastapi", "starlette", "httpx", "dependency_injector",
     "boto3", "botocore", "openai", "langchain", "langchain_core", "langchain_openai",
-    "langgraph", "pypdf", "pytesseract", "voyageai",
+    "langgraph", "pypdf", "pytesseract", "voyageai", "anthropic",
 ]
 
 [[tool.importlinter.contracts]]
@@ -100,7 +100,7 @@ forbidden_modules = [
     "pydantic", "pydantic_settings", "sqlalchemy", "asyncpg", "pgvector", "alembic",
     "dagster", "fastapi", "starlette", "httpx", "dependency_injector",
     "boto3", "botocore", "openai", "langchain", "langchain_core", "langchain_openai",
-    "langgraph", "pypdf", "pytesseract", "voyageai",
+    "langgraph", "pypdf", "pytesseract", "voyageai", "anthropic",
 ]
 
 [[tool.importlinter.contracts]]
@@ -133,10 +133,11 @@ modules = ["contract_intel_pipelines", "contract_intel_api"]
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "--import-mode=importlib -m 'not integration and not voyage'"
+addopts = "--import-mode=importlib -m 'not integration and not voyage and not anthropic'"
 markers = [
     "integration: needs the docker compose services (Postgres, LocalStack)",
     "voyage: calls the real Voyage AI API (needs CONTRACT_INTEL_EMBEDDINGS__API_KEY)",
+    "anthropic: calls the real Claude API (needs Anthropic credentials)",
 ]
 pythonpath = ["scripts"]
 testpaths = ["core/tests", "pipelines/tests", "rag_api/tests", "scripts/tests"]

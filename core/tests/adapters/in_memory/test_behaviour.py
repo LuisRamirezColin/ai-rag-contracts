@@ -95,6 +95,7 @@ async def test_writer_deletes_only_the_given_document():
 
 
 async def test_answer_generator_without_context():
-    answer = await InMemoryAnswerGenerator().generate("Any MFN?", [])
-    assert answer.text == NO_CONTEXT_ANSWER
-    assert answer.citations == ()
+    generated = await InMemoryAnswerGenerator().generate("Any MFN?", [])
+    assert generated.answer.text == NO_CONTEXT_ANSWER
+    assert generated.answer.citations == ()
+    assert generated.model

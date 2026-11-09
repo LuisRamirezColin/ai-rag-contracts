@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import (
     BaseModel,
@@ -20,6 +20,14 @@ DEFAULT_EMBEDDING_PRICE_PER_MILLION_TOKENS = 0.12
 DEFAULT_EMBEDDING_MAX_RETRIES = 3
 DEFAULT_CHUNK_MAX_CHARS = 2000
 DEFAULT_CHUNK_OVERLAP_CHARS = 200
+DEFAULT_CHAT_MODEL = "claude-sonnet-5-5"
+DEFAULT_ANSWER_MAX_TOKENS = 16000
+DEFAULT_CHAT_INPUT_PRICE_PER_MILLION = 2.0
+DEFAULT_CHAT_OUTPUT_PRICE_PER_MILLION = 10.0
+DEFAULT_TOP_K = 8
+
+Effort = Literal["low", "medium", "high", "xhigh", "max"]
+DEFAULT_EFFORT: Effort = "medium"
 
 
 class DatabaseSettings(BaseModel):
@@ -40,10 +48,24 @@ class StorageSettings(BaseModel):
 
 
 class LlmSettings(BaseModel):
-    """LLM provider settings."""
+    """Claude settings for answer generation.
+
+    An empty ``api_key`` lets the Anthropic SDK resolve its default credentials.
+    """
 
     api_key: SecretStr = SecretStr("")
-    chat_model: str = "gpt-4o-mini"
+    chat_model: str = DEFAULT_CHAT_MODEL
+    effort: Effort = DEFAULT_EFFORT
+    max_tokens: PositiveInt = DEFAULT_ANSWER_MAX_TOKENS
+    input_price_per_million: PositiveFloat = DEFAULT_CHAT_INPUT_PRICE_PER_MILLION
+    output_price_per_million: PositiveFloat = DEFAULT_CHAT_OUTPUT_PRICE_PER_MILLION
+    fallbacks: bool = False
+
+
+class RetrievalSettings(BaseModel):
+    """How many chunks are retrieved as context for each question."""
+
+    top_k: PositiveInt = DEFAULT_TOP_K
 
 
 class IngestionSettings(BaseModel):
@@ -96,3 +118,4 @@ class AppSettings(BaseSettings):
     ingestion: IngestionSettings = IngestionSettings()
     embeddings: EmbeddingsSettings = EmbeddingsSettings()
     chunking: ChunkingSettings = ChunkingSettings()
+    retrieval: RetrievalSettings = RetrievalSettings()

@@ -2,6 +2,7 @@ import hashlib
 from dataclasses import dataclass, field
 
 import pytest
+import voyageai.error as voyage_error
 
 from contract_intel.adapters.outbound.in_memory.embedder import InMemoryEmbedder
 from contract_intel.adapters.outbound.voyage import voyage_embedder as voyage
@@ -10,7 +11,11 @@ from contract_intel.adapters.outbound.voyage.voyage_embedder import (
     VoyageEmbedder,
 )
 from contract_intel.application.ports.outbound.embedder import Embedder
-from contract_intel.domain.errors import EmbeddingDimensionMismatchError
+from contract_intel.domain.errors import (
+    EmbeddingDimensionMismatchError,
+    ProviderRateLimitedError,
+    ProviderUnavailableError,
+)
 
 DIMENSIONS = 16
 TOKENS_PER_TEXT = 3
@@ -28,8 +33,11 @@ class FakeVoyageClient:
 
     dimensions: int = DIMENSIONS
     calls: list[dict[str, object]] = field(default_factory=list)
+    error: Exception | None = None
 
     async def embed(self, texts, model=None, input_type=None, truncation=True):
+        if self.error is not None:
+            raise self.error
         self.calls.append(
             {
                 "count": len(texts),
@@ -127,4 +135,22 @@ class TestVoyageSpecifics:
         with pytest.raises(EmbeddingDimensionMismatchError):
             await embedder.embed_documents(["a"])
         with pytest.raises(EmbeddingDimensionMismatchError):
+            await embedder.embed_query("q")
+
+    @pytest.mark.parametrize(
+        ("error", "expected"),
+        [
+            (voyage_error.RateLimitError("3 RPM"), ProviderRateLimitedError),
+            (voyage_error.APIConnectionError("down"), ProviderUnavailableError),
+            (voyage_error.ServiceUnavailableError("503"), ProviderUnavailableError),
+            (voyage_error.ServerError("500"), ProviderUnavailableError),
+        ],
+        ids=["rate_limit", "connection", "unavailable", "server"],
+    )
+    async def test_sdk_errors_become_domain_errors(self, error, expected):
+        embedder = _voyage(FakeVoyageClient(error=error))
+
+        with pytest.raises(expected):
+            await embedder.embed_documents(["a"])
+        with pytest.raises(expected):
             await embedder.embed_query("q")

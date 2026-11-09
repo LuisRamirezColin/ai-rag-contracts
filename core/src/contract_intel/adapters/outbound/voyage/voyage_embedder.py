@@ -4,10 +4,21 @@ from functools import cached_property
 from typing import Protocol
 
 from voyageai.client_async import AsyncClient
+from voyageai.error import (
+    APIConnectionError,
+    RateLimitError,
+    ServerError,
+    ServiceUnavailableError,
+)
 
 from contract_intel.domain.chunk import Embedding, EmbeddingBatch
-from contract_intel.domain.errors import EmbeddingDimensionMismatchError
+from contract_intel.domain.errors import (
+    EmbeddingDimensionMismatchError,
+    ProviderRateLimitedError,
+    ProviderUnavailableError,
+)
 
+PROVIDER = "voyage"
 DOCUMENT_INPUT = "document"
 QUERY_INPUT = "query"
 # Conservative per-request limits; Voyage allows 1,000 texts and 120K tokens
@@ -70,6 +81,8 @@ class VoyageEmbedder:
 
         Raises:
             EmbeddingDimensionMismatchError: If a vector has the wrong dimension.
+            ProviderRateLimitedError: If Voyage rejects a request for rate limits.
+            ProviderUnavailableError: If Voyage cannot be reached or fails.
         """
         embeddings: list[Embedding] = []
         tokens = 0
@@ -91,9 +104,14 @@ class VoyageEmbedder:
 
     async def _embed(self, texts: list[str], input_type: str) -> EmbeddingsResponse:
         # truncation=False: an over-long text is an error, never silently cut.
-        return await self._client.embed(
-            texts, model=self._config.model, input_type=input_type, truncation=False
-        )
+        try:
+            return await self._client.embed(
+                texts, model=self._config.model, input_type=input_type, truncation=False
+            )
+        except RateLimitError as error:
+            raise ProviderRateLimitedError(PROVIDER, str(error)) from error
+        except (APIConnectionError, ServiceUnavailableError, ServerError) as error:
+            raise ProviderUnavailableError(PROVIDER, str(error)) from error
 
     def _to_embedding(self, vector: Sequence[float]) -> Embedding:
         if len(vector) != self._config.dimensions:

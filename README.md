@@ -25,8 +25,8 @@ questions** whose answers cite the exact document and page they come from.
 | Hexagonal skeleton, executable architecture rules, CI | Done |
 | Document ingestion: CUAD → S3 + per-page text in Postgres, Dagster sensor | Done |
 | Vectorization: page-aware chunks, Voyage `voyage-law-2` embeddings, pgvector index | Done |
-| RAG API: retrieval in pgvector, grounded answers with Claude and page citations | Next |
-| Clause extraction: LangGraph over pages with Claude, typed CUAD clauses | Planned |
+| RAG API: `POST /ask`, retrieval in pgvector, grounded answers with Claude citing document and pages | Done |
+| Clause extraction: LangGraph over pages with Claude, typed CUAD clauses | Next |
 | Evaluation against CUAD labels (precision/recall per clause type) | Planned |
 
 Each stage is an [OpenSpec](openspec/) change with its proposal, design, spec and
@@ -103,11 +103,21 @@ term, exclusivity, most favored nation, non-compete, IP assignment, price and vo
 restrictions). Outputs are schema-validated, each clause keeps its page range, and
 token usage and cost are recorded per document.
 
-### Retrieval and answers (next)
+### Questions and answers (implemented)
 
-The API embeds the question, ranks chunks by vector similarity in pgvector (with
-clause-type filters once clauses exist), and asks Claude to answer only from the
-retrieved chunks, citing document and page.
+`POST /ask` runs `AnswerQuestion`:
+
+1. embeds the question with Voyage (query input type);
+2. retrieves the 8 most similar chunks from pgvector (optionally filtered by clause
+   type, useful once clause extraction labels chunks);
+3. sends each chunk to Claude as a document with **citations** enabled and a prompt
+   that allows only those documents; Claude's citations point to document blocks,
+   which map back to chunks, so every citation carries document and page range;
+4. records tokens and cost in `usage_records`.
+
+If retrieval finds nothing, the API answers "no information" without calling Claude.
+Provider rate limits and outages return `503` (with `Retry-After` for limits), and a
+refused answer returns `422`.
 
 ## Engineering highlights
 
@@ -167,7 +177,8 @@ See [ADR 0002](docs/architecture/adr/0002-uv-workspace-monorepo.md).
 | Documents | pypdf |
 | Wiring | dependency-injector, pydantic-settings |
 | Embeddings | Voyage AI `voyage-law-2` (1024 dimensions) |
-| LLM layer | Claude via the Anthropic SDK, LangGraph (arrive with the RAG API and clause extraction) |
+| Answers | Claude (Sonnet 5.5 by default) via the Anthropic SDK, with citations |
+| Clause extraction | LangGraph with Claude (next) |
 | Architecture rules | import-linter |
 | Planning | OpenSpec |
 
@@ -177,16 +188,25 @@ Requirements: [uv](https://docs.astral.sh/uv/), Docker with Compose.
 
 ```bash
 uv sync --all-packages                   # Python 3.12 + all workspace packages
-cp .env.example .env                     # then set CONTRACT_INTEL_EMBEDDINGS__API_KEY
+cp .env.example .env                     # then set the Voyage and Anthropic keys
 uv run python scripts/download_cuad.py   # CUAD v1 (~100 MB, SHA-256 verified) into data/cuad/
 docker compose up -d --wait              # Postgres + pgvector, LocalStack S3
 uv run alembic upgrade head              # vector extension; documents, pages, chunks, usage_records
 uv run pytest                            # unit, contract (fakes) and architecture tests
 uv run pytest -m integration             # contract tests against Postgres and LocalStack
 uv run pytest -m voyage                  # one real call to Voyage AI (skipped without a key)
+uv run pytest -m anthropic               # one real call to Claude (skipped without credentials)
 ```
 
-> `pytest -m integration` truncates the `documents` table of the local database.
+> Integration tests truncate the tables they use. Point them at a separate database to
+> keep your indexed contracts:
+>
+> ```bash
+> docker compose exec postgres psql -U contract_intel -c "CREATE DATABASE contract_intel_test"
+> export TEST_DB=postgresql+asyncpg://contract_intel:contract_intel@localhost:5432/contract_intel_test
+> CONTRACT_INTEL_DATABASE__URL=$TEST_DB uv run alembic upgrade head
+> CONTRACT_INTEL_DATABASE__URL=$TEST_DB uv run pytest -m integration
+> ```
 
 Run the inbound adapters:
 
@@ -195,8 +215,33 @@ Run the inbound adapters:
 # which overrides shell variables); the sensor then schedules the first
 # CONTRACT_INTEL_INGESTION__MAX_DOCUMENTS (5) documents.
 uv run dagster dev -m contract_intel_pipelines.definitions    # http://localhost:3000
-uv run uvicorn contract_intel_api.main:app --reload           # http://localhost:8000/health
+uv run uvicorn contract_intel_api.main:app --reload           # http://localhost:8000/docs
 ```
+
+Ask a question (real mode, after indexing):
+
+```bash
+curl -s -X POST localhost:8000/ask -H 'content-type: application/json' \
+  -d '{"question": "Which law governs the services agreement?"}'
+```
+
+```json
+{
+  "answer": "The Services Agreement is governed by Israeli law. [...] the Parties submit disputes to the exclusive jurisdiction of the courts located in Tel-Aviv, Israel. [...]",
+  "citations": [
+    {
+      "document_id": "abilityinc-06-15-2020-ex-4-25-services-agreement-8098d6a0",
+      "first_page": 7,
+      "last_page": 8,
+      "excerpt": "This Agreement and any claim, controversy or dispute arising out of or related to this Agreement [...] shall be governed by and construed in accordance with the domestic laws of the State of Israel [...]"
+    }
+  ]
+}
+```
+
+A question the contracts do not cover gets an explicit "the retrieved contracts do
+not contain this information" answer with no citations. Optional filter:
+`"clause_types": ["governing_law"]`.
 
 Inspect the result:
 
@@ -207,7 +252,7 @@ docker compose exec localstack awslocal s3 ls s3://contracts/raw/
 docker compose exec postgres psql -U contract_intel -c \
   "SELECT document_id, count(*) AS chunks, min(first_page), max(last_page) FROM chunks GROUP BY document_id"
 docker compose exec postgres psql -U contract_intel -c \
-  "SELECT operation, model, sum(input_tokens) AS tokens, sum(cost_usd) AS usd FROM usage_records GROUP BY 1, 2"
+  "SELECT operation, model, sum(input_tokens) AS input, sum(output_tokens) AS output, sum(cost_usd) AS usd FROM usage_records GROUP BY 1, 2"
 ```
 
 A contract of about ten pages takes 6K–10K Voyage tokens; the 5 demo contracts about
@@ -228,6 +273,10 @@ This demo runs entirely on free tiers, and that shapes what you see:
   the index untouched, as designed.
 - The **free token allowance** (50M tokens for `voyage-law-2`) still applies once a
   payment method is added, so the whole CUAD corpus costs nothing either way.
+- **Questions:** each one uses a Voyage request to embed the question, so on the
+  free tier the API answers at most 3 questions a minute and then returns `503` with
+  `Retry-After`. Claude has no free tier: a question with 8 chunks costs about
+  $0.017 with Sonnet 5.5 (measured: ~7.5K input and ~150-300 output tokens).
 
 ### How to lift the limits
 
@@ -255,7 +304,11 @@ Settings are read from `CONTRACT_INTEL_*` variables or `.env` (see
 | `CONTRACT_INTEL_EMBEDDINGS__API_KEY` | empty | Voyage AI key ([dashboard](https://dash.voyageai.com/)) |
 | `CONTRACT_INTEL_EMBEDDINGS__MODEL` / `__DIMENSIONS` | `voyage-law-2` / `1024` | Embedding model; the dimension must match migration `0003` |
 | `CONTRACT_INTEL_CHUNKING__MAX_CHARS` / `__OVERLAP_CHARS` | `2000` / `200` | Chunk size and overlap |
-| `CONTRACT_INTEL_LLM__API_KEY` | empty | LLM provider key (RAG API onwards) |
+| `CONTRACT_INTEL_LLM__API_KEY` | empty | Anthropic key; empty uses the SDK's default credentials |
+| `CONTRACT_INTEL_LLM__CHAT_MODEL` | `claude-sonnet-5-5` | Answer model (`claude-opus-5-5` for higher quality, $4 / $20 per million tokens) |
+| `CONTRACT_INTEL_LLM__EFFORT` | `medium` | Claude effort (`low` … `max`) |
+| `CONTRACT_INTEL_LLM__FALLBACKS` | `false` | Server-side fallback to another model when Claude declines |
+| `CONTRACT_INTEL_RETRIEVAL__TOP_K` | `8` | Chunks used as context per question |
 
 ## Testing strategy
 
@@ -263,7 +316,8 @@ Settings are read from `CONTRACT_INTEL_*` variables or `.env` (see
 |---|---|---|
 | Domain | Invariants of entities and value objects | nothing |
 | Use cases | Business behaviour, using in-memory fakes of every port | nothing |
-| Contract | Fake and real adapter behave the same (LSP) | Docker for S3/Postgres cases (`-m integration`); a Voyage key for `-m voyage` |
+| Contract | Fake and real adapter behave the same (LSP) | Docker for S3/Postgres cases (`-m integration`); real keys for `-m voyage` / `-m anthropic` |
+| API | `/ask` status codes, payloads and error mapping with a fake container | nothing |
 | Architecture | Import contracts hold; a forbidden import makes them fail | nothing |
 | Pipelines | Sensor scheduling and asset outcomes with an ephemeral Dagster instance | nothing |
 
