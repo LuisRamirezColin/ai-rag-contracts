@@ -16,6 +16,9 @@ from contract_intel.adapters.outbound.in_memory.clause_extractor import (
 from contract_intel.adapters.outbound.in_memory.contract_repository import (
     InMemoryContractRepository,
 )
+from contract_intel.adapters.outbound.in_memory.document_repository import (
+    InMemoryDocumentRepository,
+)
 from contract_intel.adapters.outbound.in_memory.document_source import (
     InMemoryDocumentSource,
 )
@@ -39,6 +42,9 @@ from contract_intel.application.ports.outbound.clause_extractor import ClauseExt
 from contract_intel.application.ports.outbound.contract_repository import (
     ContractRepository,
 )
+from contract_intel.application.ports.outbound.document_repository import (
+    DocumentRepository,
+)
 from contract_intel.application.ports.outbound.document_source import DocumentSource
 from contract_intel.application.ports.outbound.document_storage import DocumentStorage
 from contract_intel.application.ports.outbound.embedder import Embedder
@@ -53,6 +59,7 @@ _store = InMemoryVectorStore()
 
 document_source: DocumentSource = InMemoryDocumentSource()
 document_storage: DocumentStorage = InMemoryDocumentStorage()
+document_repository: DocumentRepository = InMemoryDocumentRepository()
 text_extractor: TextExtractor = InMemoryTextExtractor()
 clause_extractor: ClauseExtractor = InMemoryClauseExtractor()
 embedder: Embedder = InMemoryEmbedder()
@@ -68,6 +75,7 @@ usage_tracker: UsageTracker = InMemoryUsageTracker()
     [
         (document_source, DocumentSource),
         (document_storage, DocumentStorage),
+        (document_repository, DocumentRepository),
         (text_extractor, TextExtractor),
         (clause_extractor, ClauseExtractor),
         (embedder, Embedder),
@@ -94,6 +102,7 @@ def test_every_outbound_port_has_an_in_memory_adapter():
     covered = {
         "document_source",
         "document_storage",
+        "document_repository",
         "text_extractor",
         "clause_extractor",
         "embedder",

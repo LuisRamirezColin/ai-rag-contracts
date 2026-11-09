@@ -44,14 +44,18 @@ inward:
 ```
 core/src/contract_intel/
   domain/                 Contract, Document, Page, PageRange, Clause, ClauseType,
-                          Chunk, Embedding, ScoredChunk, Citation, Answer, UsageRecord
+                          Chunk, Embedding, ScoredChunk, Citation, Answer, UsageRecord,
+                          IngestionStatus, IngestionRecord
   application/
     ports/inbound/        what the system offers (one Protocol per module)
     ports/outbound/       what the system needs (one Protocol per module)
     use_cases/            implementations of inbound ports
   adapters/outbound/
     in_memory/            deterministic adapters for tests and offline runs
-    persistence/          SQLAlchemy declarative base
+    cuad/                 CUAD dataset source (local directory)
+    s3/                   S3 document storage (boto3)
+    pdf/                  pypdf text extractor
+    persistence/          SQLAlchemy base, models and repositories
   bootstrap/              settings + Core/Writer/Reader containers
 core/migrations/          Alembic (deployment tooling, outside the runtime package)
 pipelines/src/contract_intel_pipelines/   Dagster definitions
@@ -60,15 +64,17 @@ rag_api/src/contract_intel_api/           FastAPI application
 
 ## Ports
 
-| Port | Direction | Purpose | In-memory adapter | Production adapter (planned) |
+| Port | Direction | Purpose | In-memory adapter | Production adapter (✓ = implemented) |
 |---|---|---|---|---|
-| `IngestDocuments` | inbound | Bring new documents into storage | — | use case |
+| `DiscoverDocuments` | inbound | Source documents not ingested yet | — | `DiscoverDocumentsUseCase` ✓ |
+| `IngestDocument` | inbound | Store, extract and record one document | — | `IngestDocumentUseCase` ✓ |
 | `ExtractClauses` | inbound | Extract and persist typed clauses | — | use case |
 | `VectorizeDocument` | inbound | Chunk, embed and index a document | — | use case |
 | `AnswerQuestion` | inbound | Answer a question with citations | — | use case |
-| `DocumentSource` | outbound | Where documents come from | `InMemoryDocumentSource` | CUAD dataset source |
-| `DocumentStorage` | outbound | Durable raw files | `InMemoryDocumentStorage` | S3 |
-| `TextExtractor` | outbound | Per-page text | `InMemoryTextExtractor` | pypdf + OCR fallback |
+| `DocumentSource` | outbound | Where documents come from | `InMemoryDocumentSource` | `CuadDocumentSource` ✓ |
+| `DocumentStorage` | outbound | Durable raw files | `InMemoryDocumentStorage` | `S3DocumentStorage` ✓ |
+| `TextExtractor` | outbound | Per-page text (no OCR) | `InMemoryTextExtractor` | `PypdfTextExtractor` ✓ |
+| `DocumentRepository` | outbound | Ingestion state and page text | `InMemoryDocumentRepository` | `SqlAlchemyDocumentRepository` ✓ |
 | `ClauseExtractor` | outbound | Typed clauses from pages | `InMemoryClauseExtractor` | LangGraph map-reduce |
 | `Embedder` | outbound | Text → vectors | `InMemoryEmbedder` | OpenAI embeddings |
 | `VectorIndexWriter` | outbound | Write side of the index (pipelines only) | `InMemoryVectorIndexWriter` | pgvector |
@@ -76,6 +82,33 @@ rag_api/src/contract_intel_api/           FastAPI application
 | `ContractRepository` | outbound | Contract aggregates | `InMemoryContractRepository` | Postgres |
 | `AnswerGenerator` | outbound | Grounded answer from context | `InMemoryAnswerGenerator` | OpenAI chat |
 | `UsageTracker` | outbound | Token and cost accounting | `InMemoryUsageTracker` | Postgres |
+
+## Document ingestion flow
+
+```mermaid
+sequenceDiagram
+  participant Sensor as Dagster sensor
+  participant Asset as ingested_document (partition = document id)
+  participant Ingest as IngestDocument
+  participant Source as DocumentSource
+  participant Storage as DocumentStorage
+  participant Extractor as TextExtractor
+  participant Repo as DocumentRepository
+  Sensor->>Sensor: DiscoverDocuments → new partition keys
+  Sensor->>Asset: RunRequest per new key
+  Asset->>Ingest: execute(document_id)
+  Ingest->>Source: fetch_content
+  Ingest->>Storage: save original
+  Ingest->>Extractor: extract_pages
+  alt pages have text
+    Ingest->>Repo: save_ingested(document, pages)
+  else no text or unreadable
+    Ingest->>Repo: save_failed(document, reason)
+  end
+  Ingest-->>Asset: IngestionRecord (Failure if failed)
+```
+
+See [ADR 0005](adr/0005-per-document-ingestion-with-dynamic-partitions.md).
 
 ## SOLID map
 
@@ -96,8 +129,9 @@ rag_api/src/contract_intel_api/           FastAPI application
 3. Write the use case against the port and test it with the in-memory adapter.
 4. Implement the production adapter in `adapters/outbound/<technology>/` and run the
    same behaviour tests against it (contract tests).
-5. Wire it in `bootstrap/containers.py`: the writer container, the reader container
-   or the shared core.
+5. Wire it in `bootstrap/containers.py` as the `real` branch of the port's `Selector`
+   (writer, reader or shared core); see
+   [ADR 0006](adr/0006-lazy-per-port-adapter-selection.md).
 6. If the adapter brings a new SDK, add it to the framework-free lists in
    `[tool.importlinter]`.
 
@@ -107,3 +141,5 @@ rag_api/src/contract_intel_api/           FastAPI application
 - [ADR 0002 — `uv` workspace monorepo](adr/0002-uv-workspace-monorepo.md)
 - [ADR 0003 — Composition root with reader and writer containers](adr/0003-composition-root-reader-writer-containers.md)
 - [ADR 0004 — Executable architecture rules](adr/0004-executable-architecture-rules.md)
+- [ADR 0005 — Per-document ingestion with dynamic partitions](adr/0005-per-document-ingestion-with-dynamic-partitions.md)
+- [ADR 0006 — Lazy, per-port adapter selection](adr/0006-lazy-per-port-adapter-selection.md)

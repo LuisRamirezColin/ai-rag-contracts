@@ -39,3 +39,57 @@ jobs:
 
       - name: Tests
         run: uv run pytest
+
+  integration:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: contract_intel
+          POSTGRES_PASSWORD: contract_intel
+          POSTGRES_DB: contract_intel
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U contract_intel -d contract_intel"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+      localstack:
+        image: localstack/localstack:3.8
+        env:
+          SERVICES: s3
+        ports:
+          - 4566:4566
+        options: >-
+          --health-cmd "curl -sf http://localhost:4566/_localstack/health"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
+    env:
+      CONTRACT_INTEL_USE_FAKES: "false"
+      CONTRACT_INTEL_STORAGE__ENDPOINT_URL: http://localhost:4566
+      CONTRACT_INTEL_STORAGE__ACCESS_KEY_ID: test
+      CONTRACT_INTEL_STORAGE__SECRET_ACCESS_KEY: test
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_DEFAULT_REGION: us-east-1
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install workspace
+        run: uv sync --frozen --all-packages
+
+      - name: Migrate database
+        run: uv run alembic upgrade head
+
+      - name: Create bucket
+        run: aws --endpoint-url http://localhost:4566 s3 mb s3://contracts
+
+      - name: Integration tests
+        run: uv run pytest -m integration

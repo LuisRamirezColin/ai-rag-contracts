@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 
 from contract_intel.domain.document import Document
+from contract_intel.domain.errors import UnknownDocumentError
 from contract_intel.domain.ids import DocumentId
 
 
@@ -20,7 +21,9 @@ class InMemoryDocumentSource:
         """Return the bytes registered for ``document_id``.
 
         Raises:
-            KeyError: If the document is unknown.
+            UnknownDocumentError: If the document is unknown.
         """
+        if document_id not in self._documents:
+            raise UnknownDocumentError(document_id)
         _, content = self._documents[document_id]
         return content

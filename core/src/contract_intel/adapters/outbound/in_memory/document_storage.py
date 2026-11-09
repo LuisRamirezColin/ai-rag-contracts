@@ -1,3 +1,4 @@
+from contract_intel.domain.errors import UnknownDocumentError
 from contract_intel.domain.ids import DocumentId
 
 
@@ -15,8 +16,10 @@ class InMemoryDocumentStorage:
         """Return the stored content.
 
         Raises:
-            KeyError: If nothing is stored for ``document_id``.
+            UnknownDocumentError: If nothing is stored for ``document_id``.
         """
+        if document_id not in self._files:
+            raise UnknownDocumentError(document_id)
         return self._files[document_id]
 
     async def exists(self, document_id: DocumentId) -> bool:

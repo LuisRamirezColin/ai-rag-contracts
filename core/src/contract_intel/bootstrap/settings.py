@@ -1,7 +1,11 @@
-from pydantic import BaseModel, SecretStr
+from pathlib import Path
+
+from pydantic import BaseModel, PositiveInt, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 ENV_PREFIX = "CONTRACT_INTEL_"
+DEFAULT_CUAD_DIR = Path("data/cuad/CUAD_v1/full_contract_pdf")
+DEFAULT_MAX_DOCUMENTS = 5
 
 
 class DatabaseSettings(BaseModel):
@@ -17,6 +21,8 @@ class StorageSettings(BaseModel):
     bucket: str = "contracts"
     endpoint_url: str | None = None
     region: str = "us-east-1"
+    access_key_id: SecretStr | None = None
+    secret_access_key: SecretStr | None = None
 
 
 class LlmSettings(BaseModel):
@@ -25,6 +31,13 @@ class LlmSettings(BaseModel):
     api_key: SecretStr = SecretStr("")
     chat_model: str = "gpt-4o-mini"
     embedding_model: str = "text-embedding-3-small"
+
+
+class IngestionSettings(BaseModel):
+    """Where contracts come from and how many of them the demo ingests."""
+
+    cuad_dir: Path = DEFAULT_CUAD_DIR
+    max_documents: PositiveInt = DEFAULT_MAX_DOCUMENTS
 
 
 class AppSettings(BaseSettings):
@@ -44,3 +57,4 @@ class AppSettings(BaseSettings):
     database: DatabaseSettings = DatabaseSettings()
     storage: StorageSettings = StorageSettings()
     llm: LlmSettings = LlmSettings()
+    ingestion: IngestionSettings = IngestionSettings()
