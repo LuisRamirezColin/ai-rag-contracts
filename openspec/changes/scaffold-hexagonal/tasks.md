@@ -35,8 +35,8 @@
 
 ## 6. Entorno local y migraciones
 
-- [ ] 6.1 Crear `docker-compose.yml` con `postgres` (`pgvector/pgvector:pg16`, healthcheck) y `localstack` (`SERVICES=s3`, script `ops/localstack/init-s3.sh` que crea el bucket `contracts`); verificar `docker compose up -d` con ambos servicios `healthy` y `awslocal s3 ls` mostrando `contracts`
-- [ ] 6.2 Configurar Alembic async en `core/migrations/` con `alembic.ini` en la raíz (URL desde `AppSettings`, revisiones `0001_...`, `Base` en `adapters/outbound/persistence/base.py`) con migración `0001_enable_pgvector`; verificar `uv run alembic upgrade head` y que `SELECT extname FROM pg_extension` incluye `vector`
+- [x] 6.1 Crear `docker-compose.yml` con `postgres` (`pgvector/pgvector:pg16`, healthcheck) y `localstack` (`SERVICES=s3`, script `ops/localstack/init-s3.sh` que crea el bucket `contracts`); verificar `docker compose up -d` con ambos servicios `healthy` y `awslocal s3 ls` mostrando `contracts`
+- [x] 6.2 Configurar Alembic async en `core/migrations/` con `alembic.ini` en la raíz (URL desde `AppSettings`, revisiones `0001_...`, `Base` en `adapters/outbound/persistence/base.py`) con migración `0001_enable_pgvector`; verificar `uv run alembic upgrade head` y que `SELECT extname FROM pg_extension` incluye `vector`
 
 ## 7. CI y pre-commit
 
@@ -46,11 +46,11 @@
 ## 8. Documentación de arquitectura
 
 - [x] 8.1 Escribir ADRs en `docs/architecture/adr/` (inglés, MADR corto): `0001-hexagonal-architecture-and-rewrite`, `0002-uv-workspace-monorepo`, `0003-composition-root-reader-writer-containers`, `0004-executable-architecture-rules`; verificar que cada uno tiene Status, Context, Decision, Consequences
-- [ ] 8.2 Escribir `docs/architecture/hexagonal.md` (diagrama Mermaid de capas, tabla puertos→adaptadores previstos, mapa SOLID, cómo agregar un puerto/adaptador) y un `README.md` raíz inicial (pitch breve, estructura, quickstart: `uv sync`, `docker compose up -d`, `alembic upgrade head`, `pytest`); verificar que los comandos del quickstart funcionan tal como están escritos
+- [x] 8.2 Escribir `docs/architecture/hexagonal.md` (diagrama Mermaid de capas, tabla puertos→adaptadores previstos, mapa SOLID, cómo agregar un puerto/adaptador) y un `README.md` raíz inicial (pitch breve, estructura, quickstart: `uv sync`, `docker compose up -d`, `alembic upgrade head`, `pytest`); verificar que los comandos del quickstart funcionan tal como están escritos
 
 ## 9. Verificación integral
 
-- [ ] 9.1 Desde un clon limpio en WSL: `uv sync --frozen --all-packages && uv run ruff check . && uv run mypy core pipelines rag_api && uv run lint-imports && uv run python scripts/check_forbidden_identifiers.py && uv run pytest` todo en verde, y `git ls-files | grep -c '^legacy/'` devuelve 0
+- [x] 9.1 Desde un clon limpio en WSL: `uv sync --frozen --all-packages && uv run ruff check . && uv run mypy core pipelines rag_api && uv run lint-imports && uv run python scripts/check_forbidden_identifiers.py && uv run pytest` todo en verde, y `git ls-files | grep -c '^legacy/'` devuelve 0
 - [x] 9.2 Ejecutar `openspec validate scaffold-hexagonal --strict` sin errores
 
 ## Workflow follow-up
