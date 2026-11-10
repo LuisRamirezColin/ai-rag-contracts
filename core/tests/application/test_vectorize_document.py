@@ -1,5 +1,8 @@
 import pytest
 
+from contract_intel.adapters.outbound.in_memory.contract_repository import (
+    InMemoryContractRepository,
+)
 from contract_intel.adapters.outbound.in_memory.embedder import (
     IN_MEMORY_MODEL,
     InMemoryEmbedder,
@@ -19,9 +22,12 @@ from contract_intel.application.use_cases.vectorize_document import (
     VectorizeDocumentUseCase,
 )
 from contract_intel.domain.chunking import ChunkingPolicy
+from contract_intel.domain.clause import Clause
+from contract_intel.domain.clause_type import ClauseType
+from contract_intel.domain.contract import Contract
 from contract_intel.domain.errors import DocumentNotAvailableError
-from contract_intel.domain.ids import DocumentId
-from contract_intel.domain.page import Page
+from contract_intel.domain.ids import ClauseId, ContractId, DocumentId
+from contract_intel.domain.page import Page, PageRange
 from contract_intel.domain.usage import TokenPricing
 
 from .conftest import make_document
@@ -52,9 +58,10 @@ def tracker():
     return InMemoryUsageTracker()
 
 
-def _use_case(repository, store, tracker, embedder=None):
+def _use_case(repository, store, tracker, embedder=None, contracts=None):
     return VectorizeDocumentUseCase(
         repository,
+        contracts or InMemoryContractRepository(),
         embedder or InMemoryEmbedder(),
         InMemoryVectorIndexWriter(store),
         tracker,
@@ -148,3 +155,39 @@ async def test_other_documents_are_not_touched(repository, store, tracker):
     await use_case.execute(DOC)
 
     assert _chunks_of(store, OTHER) == other_before
+
+
+async def test_chunks_are_labelled_with_the_clause_types_they_contain(
+    repository, store, tracker
+):
+    law_text = "This Agreement shall be governed by the laws of the State of Delaware."
+    cap_text = "In no event shall either party's liability exceed the fees paid."
+    page = Page(document_id=DOC, number=1, text=f"{law_text}\n\n{cap_text}")
+    await repository.save_ingested(make_document(DOC), (page,))
+    contracts = InMemoryContractRepository()
+    clauses = tuple(
+        Clause(ClauseId(f"doc-a:{t}:000"), DOC, t, text, PageRange.single(1))
+        for t, text in [
+            (ClauseType.GOVERNING_LAW, law_text),
+            (ClauseType.CAP_ON_LIABILITY, cap_text),
+        ]
+    )
+    await contracts.save(
+        Contract(ContractId(DOC), "Doc", document_ids=(DOC,), clauses=clauses)
+    )
+
+    await _use_case(repository, store, tracker, contracts=contracts).execute(DOC)
+
+    (entry,) = store.entries.values()
+    assert entry.chunk.clause_types == {
+        ClauseType.GOVERNING_LAW,
+        ClauseType.CAP_ON_LIABILITY,
+    }
+
+
+async def test_without_clauses_chunks_have_no_types(repository, store, tracker):
+    await _ingest(repository, DOC, words=100)
+
+    await _use_case(repository, store, tracker).execute(DOC)
+
+    assert all(e.chunk.clause_types == frozenset() for e in store.entries.values())

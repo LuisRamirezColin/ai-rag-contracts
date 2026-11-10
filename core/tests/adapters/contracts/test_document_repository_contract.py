@@ -116,3 +116,16 @@ async def test_nul_characters_are_dropped(repository):
     await repository.save_ingested(DOC, pages_of(DOC, "gov\x00erning law"))
 
     assert (await repository.get_pages(DOC.id))[0].text == "governing law"
+
+
+async def test_stored_document_is_returned(repository):
+    await repository.save_ingested(DOC, pages_of(DOC, "text"))
+    await repository.save_failed(OTHER, "unreadable")
+
+    assert await repository.get_document(DOC.id) == DOC
+    assert await repository.get_document(OTHER.id) == OTHER
+
+
+async def test_unknown_document_is_not_available(repository):
+    with pytest.raises(DocumentNotAvailableError):
+        await repository.get_document(DOC.id)

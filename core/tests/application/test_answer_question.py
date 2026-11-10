@@ -78,7 +78,7 @@ async def _index(store, embedder, document_id, ordinal, text, clause_type=None):
         document_id,
         text,
         PageRange(ordinal + 1, ordinal + 2),
-        clause_type,
+        frozenset({clause_type}) if clause_type else frozenset(),
     )
     existing = [e for e in store.entries.values() if e.chunk.document_id == document_id]
     (vector,) = (await embedder.embed_documents([text])).embeddings

@@ -6,12 +6,9 @@ built on the ``CoreContainer`` defined here. The API never imports the writer
 module, so the index write port is unreachable from it (import contracts).
 
 Every outbound port is a ``Selector`` between its in-memory fake and its real
-adapter, keyed by ``settings.use_fakes``. Ports whose real adapter does not
-exist yet raise ``RealAdaptersUnavailableError`` when resolved, never when the
-container is built.
+adapter, keyed by ``settings.use_fakes``; providers are lazy, so building a
+container performs no I/O.
 """
-
-from typing import NoReturn
 
 from dependency_injector import containers, providers
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
@@ -27,6 +24,9 @@ from contract_intel.adapters.outbound.in_memory.usage_tracker import (
 from contract_intel.adapters.outbound.in_memory.vector_index import (
     InMemoryVectorStore,
 )
+from contract_intel.adapters.outbound.persistence.contract_repository import (
+    SqlAlchemyContractRepository,
+)
 from contract_intel.adapters.outbound.persistence.usage_tracker import (
     SqlAlchemyUsageTracker,
 )
@@ -40,28 +40,9 @@ FAKE = "fake"
 REAL = "real"
 
 
-class RealAdaptersUnavailableError(RuntimeError):
-    """Raised when a port without a real adapter is resolved in real mode."""
-
-    def __init__(self, port_name: str) -> None:
-        super().__init__(
-            f"No real adapter for port '{port_name}' yet; "
-            "set CONTRACT_INTEL_USE_FAKES=true"
-        )
-
-
 def adapter_mode(settings: AppSettings) -> str:
     """Return which branch of every port selector to use."""
     return FAKE if settings.use_fakes else REAL
-
-
-def _unavailable(port_name: str) -> NoReturn:
-    raise RealAdaptersUnavailableError(port_name)
-
-
-def not_implemented(port_name: str) -> providers.Provider:  # type: ignore[type-arg]
-    """Provider for the real branch of a port that has no real adapter yet."""
-    return providers.Callable(_unavailable, port_name)
 
 
 def _engine(settings: AppSettings, null_pool: bool) -> AsyncEngine:
@@ -105,7 +86,7 @@ class CoreContainer(containers.DeclarativeContainer):
     contract_repository = providers.Selector(
         mode,
         fake=providers.Singleton(InMemoryContractRepository),
-        real=not_implemented("contract_repository"),
+        real=providers.Singleton(SqlAlchemyContractRepository, session_factory),
     )
     usage_tracker = providers.Selector(
         mode,

@@ -1,7 +1,13 @@
-from sqlalchemy import select
+from collections import defaultdict
+from collections.abc import Sequence
+
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from contract_intel.adapters.outbound.persistence.models import ChunkRow
+from contract_intel.adapters.outbound.persistence.models import (
+    ChunkClauseTypeRow,
+    ChunkRow,
+)
 from contract_intel.domain.chunk import Chunk, Embedding, ScoredChunk
 from contract_intel.domain.clause_type import ClauseType
 from contract_intel.domain.ids import ChunkId, DocumentId
@@ -24,8 +30,8 @@ class PgVectorSearch:
     ) -> tuple[ScoredChunk, ...]:
         """Return up to ``limit`` chunks most similar to ``query``, best first.
 
-        The score is the cosine similarity; an empty ``clause_types`` means no
-        clause-type filter.
+        The score is the cosine similarity. With ``clause_types``, only chunks
+        labelled with at least one of them are considered.
         """
         distance = ChunkRow.embedding.cosine_distance(list(query.values)).label(
             "distance"
@@ -33,21 +39,42 @@ class PgVectorSearch:
         statement = select(ChunkRow, distance).order_by(distance).limit(limit)
         if clause_types:
             statement = statement.where(
-                ChunkRow.clause_type.in_(sorted(t.value for t in clause_types))
+                exists().where(
+                    ChunkClauseTypeRow.chunk_id == ChunkRow.id,
+                    ChunkClauseTypeRow.clause_type.in_(
+                        sorted(t.value for t in clause_types)
+                    ),
+                )
             )
         async with self._session_factory() as session:
             rows = (await session.execute(statement)).all()
+            labels = await self._labels(session, [row.id for row, _ in rows])
         return tuple(
-            ScoredChunk(_chunk(row), MAX_COSINE_SIMILARITY - float(dist))
+            ScoredChunk(
+                _chunk(row, labels[row.id]), MAX_COSINE_SIMILARITY - float(dist)
+            )
             for row, dist in rows
         )
 
+    @staticmethod
+    async def _labels(
+        session: AsyncSession, chunk_ids: Sequence[str]
+    ) -> dict[str, frozenset[ClauseType]]:
+        found: dict[str, set[ClauseType]] = defaultdict(set)
+        if chunk_ids:
+            query = select(ChunkClauseTypeRow).where(
+                ChunkClauseTypeRow.chunk_id.in_(chunk_ids)
+            )
+            for label in (await session.scalars(query)).all():
+                found[label.chunk_id].add(ClauseType(label.clause_type))
+        return defaultdict(frozenset, {k: frozenset(v) for k, v in found.items()})
 
-def _chunk(row: ChunkRow) -> Chunk:
+
+def _chunk(row: ChunkRow, clause_types: frozenset[ClauseType]) -> Chunk:
     return Chunk(
         id=ChunkId(row.id),
         document_id=DocumentId(row.document_id),
         text=row.text,
         pages=PageRange(first=row.first_page, last=row.last_page),
-        clause_type=None if row.clause_type is None else ClauseType(row.clause_type),
+        clause_types=clause_types,
     )

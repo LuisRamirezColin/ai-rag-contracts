@@ -1,3 +1,6 @@
+from contract_intel.application.ports.outbound.contract_repository import (
+    ContractRepository,
+)
 from contract_intel.application.ports.outbound.document_repository import (
     DocumentRepository,
 )
@@ -7,6 +10,7 @@ from contract_intel.application.ports.outbound.vector_index_writer import (
     VectorIndexWriter,
 )
 from contract_intel.domain.chunk import EmbeddedChunk
+from contract_intel.domain.chunk_labels import label_chunks
 from contract_intel.domain.chunking import ChunkingPolicy, chunk_pages
 from contract_intel.domain.errors import EmbeddingCountMismatchError
 from contract_intel.domain.ids import DocumentId
@@ -18,6 +22,7 @@ EMBED_DOCUMENTS_OPERATION = "embed_documents"
 class VectorizeDocumentUseCase:
     """Chunk an ingested document, embed the chunks and replace them in the index.
 
+    Chunks are labelled with the types of the stored clauses they contain.
     Embeddings are computed before the index is touched, so a provider failure
     leaves the previously indexed chunks intact.
     """
@@ -25,6 +30,7 @@ class VectorizeDocumentUseCase:
     def __init__(
         self,
         repository: DocumentRepository,
+        contracts: ContractRepository,
         embedder: Embedder,
         writer: VectorIndexWriter,
         usage_tracker: UsageTracker,
@@ -32,6 +38,7 @@ class VectorizeDocumentUseCase:
         pricing: TokenPricing,
     ) -> None:
         self._repository = repository
+        self._contracts = contracts
         self._embedder = embedder
         self._writer = writer
         self._usage_tracker = usage_tracker
@@ -45,7 +52,8 @@ class VectorizeDocumentUseCase:
             DocumentNotAvailableError: If the document is missing or not ingested.
         """
         pages = await self._repository.get_pages(document_id)
-        chunks = chunk_pages(document_id, pages, self._policy)
+        clauses = await self._contracts.clauses_of_document(document_id)
+        chunks = label_chunks(chunk_pages(document_id, pages, self._policy), clauses)
         batch = await self._embedder.embed_documents([c.text for c in chunks])
         if len(batch.embeddings) != len(chunks):
             raise EmbeddingCountMismatchError(len(chunks), len(batch.embeddings))

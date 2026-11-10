@@ -1,5 +1,6 @@
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
+from dataclasses import replace as replace_chunk
 
 import pytest
 from sqlalchemy import select, text
@@ -16,6 +17,7 @@ from contract_intel.adapters.outbound.persistence.document_repository import (
 )
 from contract_intel.adapters.outbound.persistence.models import (
     EMBEDDING_DIMENSIONS,
+    ChunkClauseTypeRow,
     ChunkRow,
 )
 from contract_intel.adapters.outbound.persistence.vector_index_writer import (
@@ -26,6 +28,7 @@ from contract_intel.application.ports.outbound.vector_index_writer import (
 )
 from contract_intel.bootstrap.settings import AppSettings
 from contract_intel.domain.chunk import Chunk, EmbeddedChunk, Embedding
+from contract_intel.domain.clause_type import ClauseType
 from contract_intel.domain.document import Document, DocumentType
 from contract_intel.domain.errors import (
     ChunkDocumentMismatchError,
@@ -41,10 +44,14 @@ MODEL = "test-model"
 Stored = list[tuple[str, str, int, int]]
 
 
+Labels = dict[str, frozenset[ClauseType]]
+
+
 @dataclass(frozen=True)
 class WriterCase:
     writer: VectorIndexWriter
     read: Callable[[DocumentId], Awaitable[Stored]]
+    labels: Callable[[DocumentId], Awaitable[Labels]]
 
 
 def embedded(document_id, ordinal, body, pages=(1, 1), dims=EMBEDDING_DIMENSIONS):
@@ -67,7 +74,16 @@ def _in_memory_case() -> WriterCase:
             if e.chunk.document_id == document_id
         )
 
-    return WriterCase(InMemoryVectorIndexWriter(store, EMBEDDING_DIMENSIONS), read)
+    async def labels(document_id: DocumentId) -> Labels:
+        return {
+            e.chunk.id: e.chunk.clause_types
+            for e in store.entries.values()
+            if e.chunk.document_id == document_id
+        }
+
+    return WriterCase(
+        InMemoryVectorIndexWriter(store, EMBEDDING_DIMENSIONS), read, labels
+    )
 
 
 @pytest.fixture
@@ -91,7 +107,21 @@ async def postgres_case() -> AsyncIterator[WriterCase]:
             rows = (await session.execute(query)).all()
         return sorted((r[0], r[1], r[2], r[3]) for r in rows)
 
-    yield WriterCase(PgVectorIndexWriter(sessions, MODEL), read)
+    async def labels(document_id: DocumentId) -> Labels:
+        found: dict[str, set[ClauseType]] = {}
+        query = (
+            select(ChunkRow.id, ChunkClauseTypeRow.clause_type)
+            .outerjoin(ChunkClauseTypeRow, ChunkClauseTypeRow.chunk_id == ChunkRow.id)
+            .where(ChunkRow.document_id == document_id)
+        )
+        async with sessions() as session:
+            for chunk_id, clause_type in (await session.execute(query)).all():
+                found.setdefault(chunk_id, set())
+                if clause_type is not None:
+                    found[chunk_id].add(ClauseType(clause_type))
+        return {k: frozenset(v) for k, v in found.items()}
+
+    yield WriterCase(PgVectorIndexWriter(sessions, MODEL), read, labels)
     await engine.dispose()
 
 
@@ -174,3 +204,25 @@ async def test_postgres_failure_mid_insert_keeps_previous_chunks(postgres_case):
         await postgres_case.writer.replace_document(DOC_A, broken)
 
     assert await postgres_case.read(DOC_A) == [("doc-a:0000", "kept", 1, 1)]
+
+
+def labelled(document_id, ordinal, body, *types):
+    item = embedded(document_id, ordinal, body)
+    return EmbeddedChunk(
+        replace_chunk(item.chunk, clause_types=frozenset(types)), item.embedding
+    )
+
+
+async def test_clause_types_are_stored_and_replaced(case):
+    law, cap = ClauseType.GOVERNING_LAW, ClauseType.CAP_ON_LIABILITY
+    await case.writer.replace_document(
+        DOC_A, [labelled(DOC_A, 0, "both", law, cap), labelled(DOC_A, 1, "none")]
+    )
+    assert await case.labels(DOC_A) == {
+        "doc-a:0000": frozenset({law, cap}),
+        "doc-a:0001": frozenset(),
+    }
+
+    await case.writer.replace_document(DOC_A, [labelled(DOC_A, 0, "law only", law)])
+
+    assert await case.labels(DOC_A) == {"doc-a:0000": frozenset({law})}

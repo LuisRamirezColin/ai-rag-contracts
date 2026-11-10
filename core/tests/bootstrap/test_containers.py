@@ -1,8 +1,13 @@
 import socket
+from pathlib import Path
 
 import pytest
 from sqlalchemy.pool import NullPool
 
+import contract_intel.application.ports.outbound as outbound_ports
+from contract_intel.adapters.outbound.in_memory.clause_extractor import (
+    InMemoryClauseExtractor,
+)
 from contract_intel.adapters.outbound.in_memory.document_source import (
     InMemoryDocumentSource,
 )
@@ -15,25 +20,34 @@ from contract_intel.application.ports.inbound.vectorize_document import (
     VectorizeDocument,
 )
 from contract_intel.application.ports.outbound.answer_generator import AnswerGenerator
+from contract_intel.application.ports.outbound.clause_extractor import ClauseExtractor
+from contract_intel.application.ports.outbound.contract_repository import (
+    ContractRepository,
+)
 from contract_intel.application.ports.outbound.document_repository import (
     DocumentRepository,
 )
 from contract_intel.application.ports.outbound.document_source import DocumentSource
 from contract_intel.application.ports.outbound.document_storage import DocumentStorage
 from contract_intel.application.ports.outbound.embedder import Embedder
+from contract_intel.application.ports.outbound.ground_truth_source import (
+    GroundTruthSource,
+)
 from contract_intel.application.ports.outbound.text_extractor import TextExtractor
 from contract_intel.application.ports.outbound.usage_tracker import UsageTracker
 from contract_intel.application.ports.outbound.vector_index_writer import (
     VectorIndexWriter,
 )
 from contract_intel.application.ports.outbound.vector_search import VectorSearch
-from contract_intel.bootstrap.core import RealAdaptersUnavailableError
 from contract_intel.bootstrap.reader import ReaderContainer, build_reader_container
 from contract_intel.bootstrap.settings import AppSettings
 from contract_intel.bootstrap.writer import WriterContainer, build_writer_container
+from contract_intel.domain.clause import Clause
+from contract_intel.domain.clause_type import ClauseType
 from contract_intel.domain.document import Document, DocumentType
-from contract_intel.domain.ids import ContractId, DocumentId
+from contract_intel.domain.ids import ClauseId, ContractId, DocumentId
 from contract_intel.domain.ingestion import IngestionStatus
+from contract_intel.domain.page import PageRange
 
 INGESTION_PORTS = {
     "document_source": DocumentSource,
@@ -44,10 +58,14 @@ INGESTION_PORTS = {
 REAL_WRITER_PORTS = {
     **INGESTION_PORTS,
     "vector_index_writer": VectorIndexWriter,
+    "clause_extractor": ClauseExtractor,
+    "ground_truth_source": GroundTruthSource,
 }
-REAL_CORE_PORTS = {"embedder": Embedder, "usage_tracker": UsageTracker}
-NOT_YET_REAL_WRITER_PORTS = ["clause_extractor"]
-NOT_YET_REAL_CORE_PORTS = ["contract_repository"]
+REAL_CORE_PORTS = {
+    "embedder": Embedder,
+    "usage_tracker": UsageTracker,
+    "contract_repository": ContractRepository,
+}
 REAL_READER_PORTS = {
     "vector_search": VectorSearch,
     "answer_generator": AnswerGenerator,
@@ -109,6 +127,8 @@ def test_reader_container_exposes_no_ingestion_or_index_writes():
         "discover_documents",
         "ingest_document",
         "vectorize_document",
+        "extract_clauses",
+        "evaluate_clause_extraction",
     ]
     for name in writer_only:
         assert name not in ReaderContainer.providers
@@ -143,18 +163,55 @@ def test_writer_engine_uses_null_pool_and_reader_a_pool(real_settings):
     assert not isinstance(reader_engine.pool, NullPool)
 
 
-@pytest.mark.parametrize("port_name", NOT_YET_REAL_CORE_PORTS)
-def test_core_ports_without_real_adapter_fail_on_resolution(real_settings, port_name):
-    container = build_writer_container(real_settings)
-    with pytest.raises(RealAdaptersUnavailableError, match=port_name):
-        getattr(container.core, port_name)()
+def test_every_outbound_port_has_a_real_adapter(no_network, real_settings):
+    writer = build_writer_container(real_settings)
+    reader = build_reader_container(real_settings)
+    wired = {**REAL_CORE_PORTS, **REAL_WRITER_PORTS, **REAL_READER_PORTS}
+    outbound = [
+        *(getattr(writer.core, name)() for name in REAL_CORE_PORTS),
+        *(getattr(writer, name)() for name in REAL_WRITER_PORTS),
+        *(getattr(reader, name)() for name in REAL_READER_PORTS),
+    ]
+
+    port_modules = {
+        p.stem
+        for p in Path(outbound_ports.__path__[0]).glob("*.py")
+        if p.stem != "__init__"
+    }
+    assert set(wired) == port_modules
+    assert not any("InMemory" in type(adapter).__name__ for adapter in outbound)
 
 
-@pytest.mark.parametrize("port_name", NOT_YET_REAL_WRITER_PORTS)
-def test_writer_ports_without_real_adapter_fail_on_resolution(real_settings, port_name):
-    container = build_writer_container(real_settings)
-    with pytest.raises(RealAdaptersUnavailableError, match=port_name):
-        getattr(container, port_name)()
+async def test_ingest_extract_and_vectorize_label_chunks_with_fakes(
+    no_network, fake_settings
+):
+    document_id = DocumentId("contract-1")
+    document = Document(
+        document_id, ContractId("contract-1"), "Contract", DocumentType.OTHER
+    )
+    law_text = "This Agreement shall be governed by the laws of the State of Delaware."
+    law = Clause(
+        ClauseId("contract-1:governing_law:000"),
+        document_id,
+        ClauseType.GOVERNING_LAW,
+        law_text,
+        PageRange(1, 1),
+    )
+    container = build_writer_container(fake_settings)
+    container.document_source.override(
+        InMemoryDocumentSource({document_id: (document, law_text.encode())})
+    )
+    container.clause_extractor.override(InMemoryClauseExtractor({document_id: (law,)}))
+
+    await container.ingest_document().execute(document_id)
+    clauses = await container.extract_clauses().execute(document_id)
+    await container.vectorize_document().execute(document_id)
+
+    assert clauses == (law,)
+    (entry,) = container.core.vector_store().entries.values()
+    assert entry.chunk.clause_types == {ClauseType.GOVERNING_LAW}
+    report = await container.evaluate_clause_extraction().execute()
+    assert report.excluded_documents == ("Contract",)
 
 
 def test_real_reader_adapters_resolve_without_network(no_network, real_settings):

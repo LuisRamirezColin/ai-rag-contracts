@@ -55,7 +55,7 @@ async def _index(writer, embedder, chunk_id, document_id, text, clause_type):
         document_id=document_id,
         text=text,
         pages=PageRange.single(1),
-        clause_type=clause_type,
+        clause_types=frozenset({clause_type}) if clause_type else frozenset(),
     )
     (embedding,) = (await embedder.embed_documents([text])).embeddings
     await writer.replace_document(document_id, [EmbeddedChunk(chunk, embedding)])

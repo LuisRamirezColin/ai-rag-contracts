@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from contract_intel.adapters.outbound.persistence.models import (
     EMBEDDING_DIMENSIONS,
+    ChunkClauseTypeRow,
     ChunkRow,
 )
 from contract_intel.domain.chunk import EmbeddedChunk
@@ -38,6 +39,13 @@ class PgVectorIndexWriter:
                     insert(ChunkRow),
                     [self._row(ordinal, c) for ordinal, c in enumerate(chunks)],
                 )
+            labels = [
+                {"chunk_id": e.chunk.id, "clause_type": clause_type.value}
+                for e in chunks
+                for clause_type in sorted(e.chunk.clause_types)
+            ]
+            if labels:
+                await session.execute(insert(ChunkClauseTypeRow), labels)
 
     async def delete_document(self, document_id: DocumentId) -> None:
         """Remove every chunk of ``document_id``."""
@@ -59,9 +67,6 @@ class PgVectorIndexWriter:
             "text": chunk.text,
             "first_page": chunk.pages.first,
             "last_page": chunk.pages.last,
-            "clause_type": None
-            if chunk.clause_type is None
-            else chunk.clause_type.value,
             "embedding": list(embedded.embedding.values),
             "model": self._model,
         }

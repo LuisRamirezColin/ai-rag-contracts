@@ -3,26 +3,20 @@ from dataclasses import dataclass
 from functools import cached_property
 from typing import Any
 
-from anthropic import (
-    APIConnectionError,
-    AsyncAnthropic,
-    InternalServerError,
-    RateLimitError,
-)
+from anthropic import AsyncAnthropic
 from anthropic.types.beta import BetaCitationCharLocation, BetaMessage, BetaTextBlock
 
+from contract_intel.adapters.outbound.anthropic.errors import (
+    PROVIDER,
+    anthropic_errors,
+    ensure_not_refused,
+)
 from contract_intel.domain.answer import Answer, Citation, GeneratedAnswer
 from contract_intel.domain.chunk import ScoredChunk
-from contract_intel.domain.errors import (
-    AnswerRefusedError,
-    ProviderRateLimitedError,
-    ProviderUnavailableError,
-)
+from contract_intel.domain.errors import AnswerRefusedError, ProviderUnavailableError
 
-PROVIDER = "anthropic"
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
 DEFAULT_FALLBACKS = "default"
-REFUSAL_STOP_REASON = "refusal"
 SYSTEM_PROMPT = (
     "You answer questions about commercial contracts. Use only the documents "
     "provided in the user's message; each is an excerpt of a contract with its "
@@ -72,9 +66,9 @@ class AnthropicAnswerGenerator:
             ProviderUnavailableError: If Anthropic cannot be reached or fails.
         """
         response = await self._call(self._request(question, context))
-        if response.stop_reason == REFUSAL_STOP_REASON:
-            details = response.stop_details
-            raise AnswerRefusedError(details.category if details else None)
+        ensure_not_refused(
+            response.stop_reason, response.stop_details, AnswerRefusedError
+        )
         text, citations = _parse(response, context)
         if not text.strip():
             raise ProviderUnavailableError(PROVIDER, "empty answer")
@@ -86,12 +80,8 @@ class AnthropicAnswerGenerator:
         )
 
     async def _call(self, request: dict[str, Any]) -> BetaMessage:
-        try:
+        with anthropic_errors():
             return await self._create(**request)
-        except RateLimitError as error:
-            raise ProviderRateLimitedError(PROVIDER, str(error)) from error
-        except (APIConnectionError, InternalServerError) as error:
-            raise ProviderUnavailableError(PROVIDER, str(error)) from error
 
     def _request(self, question: str, context: Sequence[ScoredChunk]) -> dict[str, Any]:
         documents = [_document(item) for item in context]

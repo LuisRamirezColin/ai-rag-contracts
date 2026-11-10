@@ -56,7 +56,8 @@ core/src/contract_intel/
     cuad/                 CUAD dataset source (local directory)
     s3/                   S3 document storage (boto3)
     voyage/               Voyage AI embeddings
-    anthropic/            Claude answer generation (citations)
+    anthropic/            Claude answer generation (citations), shared error mapping
+    langgraph/            clause extraction graph (map-reduce over Claude)
     pdf/                  pypdf text extractor
     persistence/          SQLAlchemy base, models and repositories
   bootstrap/              settings; core.py (shared), writer.py (pipelines), reader.py (API)
@@ -71,18 +72,19 @@ rag_api/src/contract_intel_api/           FastAPI application
 |---|---|---|---|---|
 | `DiscoverDocuments` | inbound | Source documents not ingested yet | — | `DiscoverDocumentsUseCase` ✓ |
 | `IngestDocument` | inbound | Store, extract and record one document | — | `IngestDocumentUseCase` ✓ |
-| `ExtractClauses` | inbound | Extract and persist typed clauses | — | use case |
+| `ExtractClauses` | inbound | Extract and persist typed clauses | — | `ExtractClausesUseCase` ✓ |
 | `VectorizeDocument` | inbound | Chunk, embed and index a document | — | `VectorizeDocumentUseCase` ✓ |
 | `AnswerQuestion` | inbound | Answer a question with citations | — | `AnswerQuestionUseCase` ✓ |
 | `DocumentSource` | outbound | Where documents come from | `InMemoryDocumentSource` | `CuadDocumentSource` ✓ |
 | `DocumentStorage` | outbound | Durable raw files | `InMemoryDocumentStorage` | `S3DocumentStorage` ✓ |
 | `TextExtractor` | outbound | Per-page text (no OCR) | `InMemoryTextExtractor` | `PypdfTextExtractor` ✓ |
 | `DocumentRepository` | outbound | Ingestion state and page text | `InMemoryDocumentRepository` | `SqlAlchemyDocumentRepository` ✓ |
-| `ClauseExtractor` | outbound | Typed clauses from pages | `InMemoryClauseExtractor` | LangGraph map-reduce |
+| `ClauseExtractor` | outbound | Typed clauses from pages | `InMemoryClauseExtractor` | `LangGraphClauseExtractor` (Claude) ✓ |
 | `Embedder` | outbound | Document and query vectors | `InMemoryEmbedder` | `VoyageEmbedder` (`voyage-law-2`) ✓ |
 | `VectorIndexWriter` | outbound | Write side of the index (pipelines only) | `InMemoryVectorIndexWriter` | `PgVectorIndexWriter` ✓ |
 | `VectorSearch` | outbound | Read side of the index (API only) | `InMemoryVectorSearch` | `PgVectorSearch` ✓ |
-| `ContractRepository` | outbound | Contract aggregates | `InMemoryContractRepository` | Postgres |
+| `ContractRepository` | outbound | Contracts, their documents and clauses | `InMemoryContractRepository` | `SqlAlchemyContractRepository` ✓ |
+| `GroundTruthSource` | outbound | Expert labels for evaluation | `InMemoryGroundTruthSource` | `CuadGroundTruth` ✓ |
 | `AnswerGenerator` | outbound | Grounded answer from context | `InMemoryAnswerGenerator` | `AnthropicAnswerGenerator` (Claude, citations) ✓ |
 | `UsageTracker` | outbound | Token and cost accounting | `InMemoryUsageTracker` | `SqlAlchemyUsageTracker` ✓ |
 
@@ -129,6 +131,21 @@ flowchart LR
 Embeddings are computed before the index is touched, and the writer replaces a
 document's chunks in one transaction. See
 [ADR 0007](adr/0007-embeddings-with-voyage-and-pgvector.md).
+
+## Clause extraction flow
+
+The per-document Dagster job runs `ingested_document` → `extracted_clauses` →
+`indexed_document`. Extraction is a LangGraph map-reduce over windows of pages; a
+deterministic reduce keeps only verbatim candidates and merges overlaps. Vectorization
+then labels every chunk with all the clause types it contains. See
+[ADR 0009](adr/0009-clause-extraction-map-reduce-with-langgraph.md).
+
+```mermaid
+flowchart LR
+  I[ingested_document] --> X[extracted_clauses: ExtractClauses]
+  X --> V[indexed_document: VectorizeDocument + label_chunks]
+  X --> E[extraction_evaluation: EvaluateClauseExtraction vs CUAD]
+```
 
 ## Question flow
 
@@ -179,3 +196,4 @@ flowchart LR
 - [ADR 0006 — Lazy, per-port adapter selection](adr/0006-lazy-per-port-adapter-selection.md)
 - [ADR 0007 — Embeddings with Voyage AI, index in pgvector](adr/0007-embeddings-with-voyage-and-pgvector.md)
 - [ADR 0008 — Grounded answers with Claude citations](adr/0008-grounded-answers-with-claude-citations.md)
+- [ADR 0009 — Clause extraction: map-reduce with LangGraph and Claude](adr/0009-clause-extraction-map-reduce-with-langgraph.md)

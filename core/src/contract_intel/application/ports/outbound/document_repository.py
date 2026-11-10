@@ -18,6 +18,14 @@ class DocumentRepository(Protocol):
         """Mark ``document`` failed, dropping any previously stored pages."""
         ...
 
+    async def get_document(self, document_id: DocumentId) -> Document:
+        """Return the stored document.
+
+        Raises:
+            DocumentNotAvailableError: If no document is stored under the id.
+        """
+        ...
+
     async def get_record(self, document_id: DocumentId) -> IngestionRecord | None:
         """Return the ingestion record, or ``None`` if never ingested."""
         ...

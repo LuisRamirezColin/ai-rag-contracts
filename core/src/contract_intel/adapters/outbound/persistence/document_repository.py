@@ -3,9 +3,9 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from contract_intel.adapters.outbound.persistence.models import DocumentRow, PageRow
-from contract_intel.domain.document import Document
+from contract_intel.domain.document import Document, DocumentType
 from contract_intel.domain.errors import DocumentNotAvailableError
-from contract_intel.domain.ids import DocumentId
+from contract_intel.domain.ids import ContractId, DocumentId
 from contract_intel.domain.ingestion import IngestionRecord, IngestionStatus
 from contract_intel.domain.page import Page
 
@@ -37,6 +37,23 @@ class SqlAlchemyDocumentRepository:
         async with self._session_factory.begin() as session:
             await self._upsert(session, document, record)
             await self._delete_pages(session, document.id)
+
+    async def get_document(self, document_id: DocumentId) -> Document:
+        """Return the stored document.
+
+        Raises:
+            DocumentNotAvailableError: If no document is stored under the id.
+        """
+        async with self._session_factory() as session:
+            row = await session.get(DocumentRow, document_id)
+        if row is None:
+            raise DocumentNotAvailableError(document_id)
+        return Document(
+            id=DocumentId(row.id),
+            contract_id=ContractId(row.contract_id),
+            title=row.title,
+            document_type=DocumentType(row.document_type),
+        )
 
     async def get_record(self, document_id: DocumentId) -> IngestionRecord | None:
         """Return the stored ingestion record, if any."""

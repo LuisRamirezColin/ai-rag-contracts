@@ -25,6 +25,8 @@ DEFAULT_ANSWER_MAX_TOKENS = 16000
 DEFAULT_CHAT_INPUT_PRICE_PER_MILLION = 2.0
 DEFAULT_CHAT_OUTPUT_PRICE_PER_MILLION = 10.0
 DEFAULT_TOP_K = 8
+DEFAULT_EXTRACTION_WINDOW_CHARS = 24000
+DEFAULT_LABELS_PATH = Path("data/cuad/CUAD_v1/master_clauses.csv")
 
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 DEFAULT_EFFORT: Effort = "medium"
@@ -98,6 +100,23 @@ class ChunkingSettings(BaseModel):
         return self
 
 
+class ExtractionSettings(BaseModel):
+    """Claude settings for clause extraction (reuses ``llm.api_key``)."""
+
+    model: str = DEFAULT_CHAT_MODEL
+    effort: Effort = DEFAULT_EFFORT
+    max_tokens: PositiveInt = DEFAULT_ANSWER_MAX_TOKENS
+    window_chars: PositiveInt = DEFAULT_EXTRACTION_WINDOW_CHARS
+    input_price_per_million: PositiveFloat = DEFAULT_CHAT_INPUT_PRICE_PER_MILLION
+    output_price_per_million: PositiveFloat = DEFAULT_CHAT_OUTPUT_PRICE_PER_MILLION
+
+
+class EvaluationSettings(BaseModel):
+    """Where the expert labels used to evaluate extraction live."""
+
+    labels_path: Path = DEFAULT_LABELS_PATH
+
+
 class AppSettings(BaseSettings):
     """Application settings loaded from ``CONTRACT_INTEL_*`` environment variables.
 
@@ -119,3 +138,5 @@ class AppSettings(BaseSettings):
     embeddings: EmbeddingsSettings = EmbeddingsSettings()
     chunking: ChunkingSettings = ChunkingSettings()
     retrieval: RetrievalSettings = RetrievalSettings()
+    extraction: ExtractionSettings = ExtractionSettings()
+    evaluation: EvaluationSettings = EvaluationSettings()

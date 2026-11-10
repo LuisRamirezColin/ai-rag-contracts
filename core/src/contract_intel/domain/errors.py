@@ -112,10 +112,14 @@ class ProviderUnavailableError(DomainError):
         self.provider = provider
 
 
-class AnswerRefusedError(DomainError):
-    """Raised when the answer model declines to answer a question."""
+class ModelRefusedError(DomainError):
+    """Raised when a model declines a request (safety classifiers)."""
 
     def __init__(self, category: str | None) -> None:
         reason = f" (category: {category})" if category else ""
         super().__init__(f"The model declined to answer{reason}")
         self.category = category
+
+
+class AnswerRefusedError(ModelRefusedError):
+    """Raised when the answer model declines to answer a question."""

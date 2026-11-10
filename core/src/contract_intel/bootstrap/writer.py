@@ -6,6 +6,7 @@ from pydantic import SecretStr
 from contract_intel.adapters.outbound.cuad.cuad_document_source import (
     CuadDocumentSource,
 )
+from contract_intel.adapters.outbound.cuad.cuad_ground_truth import CuadGroundTruth
 from contract_intel.adapters.outbound.in_memory.clause_extractor import (
     InMemoryClauseExtractor,
 )
@@ -18,11 +19,18 @@ from contract_intel.adapters.outbound.in_memory.document_source import (
 from contract_intel.adapters.outbound.in_memory.document_storage import (
     InMemoryDocumentStorage,
 )
+from contract_intel.adapters.outbound.in_memory.ground_truth_source import (
+    InMemoryGroundTruthSource,
+)
 from contract_intel.adapters.outbound.in_memory.text_extractor import (
     InMemoryTextExtractor,
 )
 from contract_intel.adapters.outbound.in_memory.vector_index import (
     InMemoryVectorIndexWriter,
+)
+from contract_intel.adapters.outbound.langgraph.langgraph_clause_extractor import (
+    ExtractionConfig,
+    LangGraphClauseExtractor,
 )
 from contract_intel.adapters.outbound.pdf.pypdf_text_extractor import (
     PypdfTextExtractor,
@@ -40,13 +48,19 @@ from contract_intel.adapters.outbound.s3.s3_document_storage import (
 from contract_intel.application.use_cases.discover_documents import (
     DiscoverDocumentsUseCase,
 )
+from contract_intel.application.use_cases.evaluate_clause_extraction import (
+    EvaluateClauseExtractionUseCase,
+)
+from contract_intel.application.use_cases.extract_clauses import (
+    ExtractClausesUseCase,
+)
 from contract_intel.application.use_cases.ingest_document import (
     IngestDocumentUseCase,
 )
 from contract_intel.application.use_cases.vectorize_document import (
     VectorizeDocumentUseCase,
 )
-from contract_intel.bootstrap.core import CoreContainer, not_implemented
+from contract_intel.bootstrap.core import CoreContainer
 from contract_intel.bootstrap.settings import AppSettings
 from contract_intel.domain.chunking import ChunkingPolicy
 from contract_intel.domain.usage import TokenPricing
@@ -65,6 +79,24 @@ def _s3_location(settings: AppSettings) -> S3Location:
 
 def _reveal(secret: SecretStr | None) -> str | None:
     return None if secret is None else secret.get_secret_value()
+
+
+def _extraction_config(settings: AppSettings) -> ExtractionConfig:
+    extraction = settings.extraction
+    return ExtractionConfig(
+        api_key=settings.llm.api_key.get_secret_value() or None,
+        model=extraction.model,
+        effort=extraction.effort,
+        max_tokens=extraction.max_tokens,
+        window_chars=extraction.window_chars,
+    )
+
+
+def _extraction_pricing(settings: AppSettings) -> TokenPricing:
+    return TokenPricing(
+        input_per_million=settings.extraction.input_price_per_million,
+        output_per_million=settings.extraction.output_price_per_million,
+    )
 
 
 def _chunking_policy(settings: AppSettings) -> ChunkingPolicy:
@@ -110,7 +142,17 @@ class WriterContainer(containers.DeclarativeContainer):
     clause_extractor = providers.Selector(
         core.mode,
         fake=providers.Singleton(InMemoryClauseExtractor),
-        real=not_implemented("clause_extractor"),
+        real=providers.Singleton(
+            LangGraphClauseExtractor,
+            providers.Callable(_extraction_config, core.settings),
+        ),
+    )
+    ground_truth_source = providers.Selector(
+        core.mode,
+        fake=providers.Singleton(InMemoryGroundTruthSource),
+        real=providers.Singleton(
+            CuadGroundTruth, core.settings.provided.evaluation.labels_path
+        ),
     )
     vector_index_writer = providers.Selector(
         core.mode,
@@ -139,9 +181,24 @@ class WriterContainer(containers.DeclarativeContainer):
         extractor=text_extractor,
         repository=document_repository,
     )
+    extract_clauses = providers.Factory(
+        ExtractClausesUseCase,
+        documents=document_repository,
+        extractor=clause_extractor,
+        contracts=core.contract_repository,
+        usage_tracker=core.usage_tracker,
+        pricing=providers.Callable(_extraction_pricing, core.settings),
+    )
+    evaluate_clause_extraction = providers.Factory(
+        EvaluateClauseExtractionUseCase,
+        documents=document_repository,
+        contracts=core.contract_repository,
+        ground_truth=ground_truth_source,
+    )
     vectorize_document = providers.Factory(
         VectorizeDocumentUseCase,
         repository=document_repository,
+        contracts=core.contract_repository,
         embedder=core.embedder,
         writer=vector_index_writer,
         usage_tracker=core.usage_tracker,

@@ -9,9 +9,9 @@ termination rights, liability caps, exclusivity, renewal terms. This project tur
 contract corpus into **structured clause data** you can filter, and lets you **ask
 questions** whose answers cite the exact document and page they come from.
 
-- **Writer side (Dagster):** ingests contracts, embeds page-aware chunks with Voyage
-  AI and continuously feeds a pgvector index; typed clause extraction with Claude
-  comes next.
+- **Writer side (Dagster):** ingests contracts, extracts typed clauses with a
+  LangGraph map-reduce over Claude, embeds page-aware chunks labelled with their
+  clause types (Voyage AI) and continuously feeds a pgvector index.
 - **Reader side (FastAPI):** answers questions with Claude from the chunks retrieved
   by vector similarity (plus clause-type filters), citing document and page.
 - **Data:** the public [CUAD](https://www.atticusprojectai.org/cuad) dataset (510
@@ -26,7 +26,7 @@ questions** whose answers cite the exact document and page they come from.
 | Document ingestion: CUAD → S3 + per-page text in Postgres, Dagster sensor | Done |
 | Vectorization: page-aware chunks, Voyage `voyage-law-2` embeddings, pgvector index | Done |
 | RAG API: `POST /ask`, retrieval in pgvector, grounded answers with Claude citing document and pages | Done |
-| Clause extraction: LangGraph over pages with Claude, typed CUAD clauses | Next |
+| Clause extraction: LangGraph map-reduce with Claude, typed CUAD clauses, chunks labelled for `/ask`, evaluation vs lawyer labels | Done |
 | Evaluation against CUAD labels (precision/recall per clause type) | Planned |
 
 Each stage is an [OpenSpec](openspec/) change with its proposal, design, spec and
@@ -80,10 +80,25 @@ edges, wired in a single composition root.
      stop other documents.
 4. Re-ingesting is idempotent: state and pages are replaced, never duplicated.
 
+### Clause extraction (implemented)
+
+In the same Dagster run, after ingestion, the `extracted_clauses` asset calls
+`ExtractClauses`, backed by a LangGraph map-reduce over Claude:
+
+1. pages are grouped into windows of whole pages (~24,000 characters);
+2. each window is sent to Claude in parallel with a structured-output schema (clause
+   type, verbatim text, first and last page) for 10 CUAD categories: governing law,
+   termination for convenience, cap on liability, renewal term, exclusivity, most
+   favored nation, non-compete, IP ownership assignment, price and volume
+   restrictions;
+3. a deterministic reduce keeps only candidates whose text appears literally in the
+   pages they claim and merges overlapping ones;
+4. the clauses are stored per contract (`contracts`, `clauses`) and tokens and cost
+   go to `usage_records`.
+
 ### Vectorization (implemented)
 
-In the same Dagster run, once ingestion succeeds, the `indexed_document` asset calls
-`VectorizeDocument`:
+Once clauses are extracted, the `indexed_document` asset calls `VectorizeDocument`:
 
 1. splits the page text into windows of at most 2,000 characters with 200 of
    overlap, cut at paragraph, line or word boundaries; each chunk keeps the page
@@ -93,15 +108,36 @@ In the same Dagster run, once ingestion succeeds, the `indexed_document` asset c
    the query input type);
 3. replaces the document's chunks in pgvector in one transaction (HNSW cosine
    index), so a reader never sees a half-indexed document;
-4. records tokens and estimated cost per document in `usage_records`.
+4. labels every chunk with **all** the clause types whose clauses it contains
+   (`chunk_clause_types`), which powers the `clause_types` filter of `/ask`;
+5. records tokens and estimated cost per document in `usage_records`.
 
-### Clause extraction (planned)
+### Evaluation against lawyer labels (implemented)
 
-A LangGraph workflow reads the stored pages and returns clauses typed with the CUAD
-taxonomy (governing law, termination for convenience, cap on liability, renewal
-term, exclusivity, most favored nation, non-compete, IP assignment, price and volume
-restrictions). Outputs are schema-validated, each clause keeps its page range, and
-token usage and cost are recorded per document.
+CUAD ships expert labels for every contract. `EvaluateClauseExtraction` compares the
+stored clauses with them, without calling the model: precision, recall and F1 of
+clause presence per type, and whether the extracted text overlaps the lawyers'
+excerpts. Reference run on the 3 indexed demo contracts (Sonnet 5.5):
+
+| Clause type | TP | FP | FN | Precision | Recall | F1 | Evidence match |
+|---|---|---|---|---|---|---|---|
+| governing_law | 3 | 0 | 0 | 100% | 100% | 100% | 100% |
+| termination_for_convenience | 1 | 1 | 0 | 50% | 100% | 67% | 0% |
+| cap_on_liability | 1 | 0 | 0 | 100% | 100% | 100% | 100% |
+| renewal_term | 1 | 1 | 0 | 50% | 100% | 67% | 100% |
+| exclusivity | 0 | 1 | 0 | 0% | n/a | n/a | n/a |
+| most_favored_nation | 0 | 0 | 0 | n/a | n/a | n/a | n/a |
+| non_compete | 1 | 0 | 0 | 100% | 100% | 100% | 100% |
+| ip_ownership_assignment | 1 | 0 | 0 | 100% | 100% | 100% | 100% |
+| price_restrictions | 0 | 0 | 0 | n/a | n/a | n/a | n/a |
+| volume_restriction | 0 | 0 | 0 | n/a | n/a | n/a | n/a |
+| **total (micro)** | 8 | 3 | 0 | 73% | 100% | 84% | 88% |
+
+Evaluated documents: 3; excluded (no expert labels): 0
+
+Three contracts make these numbers illustrative; the same pipeline scales to all 510.
+False positives here are typically defensible but outside CUAD's narrower definition
+(e.g. a "dedicated personnel" clause read as exclusivity).
 
 ### Questions and answers (implemented)
 
@@ -178,7 +214,7 @@ See [ADR 0002](docs/architecture/adr/0002-uv-workspace-monorepo.md).
 | Wiring | dependency-injector, pydantic-settings |
 | Embeddings | Voyage AI `voyage-law-2` (1024 dimensions) |
 | Answers | Claude (Sonnet 5.5 by default) via the Anthropic SDK, with citations |
-| Clause extraction | LangGraph with Claude (next) |
+| Clause extraction | LangGraph map-reduce with Claude structured outputs |
 | Architecture rules | import-linter |
 | Planning | OpenSpec |
 
@@ -241,7 +277,25 @@ curl -s -X POST localhost:8000/ask -H 'content-type: application/json' \
 
 A question the contracts do not cover gets an explicit "the retrieved contracts do
 not contain this information" answer with no citations. Optional filter:
-`"clause_types": ["governing_law"]`.
+`"clause_types": ["governing_law"]` restricts retrieval to chunks labelled with that
+clause type:
+
+```bash
+curl -s -X POST localhost:8000/ask -H 'content-type: application/json' \
+  -d '{"question": "Which law governs each agreement?", "clause_types": ["governing_law"]}'
+```
+
+answers per contract (Israel, Pennsylvania, California) citing only governing-law
+chunks.
+
+Evaluate the extraction against CUAD's lawyer labels (no model calls):
+
+```bash
+uv run python scripts/evaluate_extraction.py
+```
+
+or materialize the `extraction_evaluation` asset in Dagster (Markdown report in its
+metadata).
 
 Inspect the result:
 
@@ -286,6 +340,10 @@ This demo runs entirely on free tiers, and that shapes what you see:
 | Cap concurrent runs (Dagster `QueuedRunCoordinator` `max_concurrent_runs`, or a tag concurrency limit on `ingest_documents_job`) | small | Avoids request bursts when many documents arrive at once |
 | Token-aware throttling in `VoyageEmbedder` (smaller batches plus a requests/tokens-per-minute limiter) | medium | Works within any rate limit, including the free one, at the cost of throughput; confined to the adapter |
 | Retry policy with backoff on `indexed_document` for `RateLimitError` | small | Transient limit hits recover without manual re-runs |
+
+Claude has no free tier: clause extraction cost $0.078 for the 3 demo contracts
+(~29K input and ~2K output tokens with Sonnet 5.5), i.e. roughly $13 for all of CUAD;
+`usage_records` tracks it per document.
 | Voyage Batch API for bulk backfills | medium | 33% cheaper and asynchronous, suited to indexing all 510 contracts |
 | Another provider or a local model behind the `Embedder` port | medium | No external limits; one adapter, settings and a new migration if the dimension changes ([ADR 0007](docs/architecture/adr/0007-embeddings-with-voyage-and-pgvector.md)) |
 
@@ -309,6 +367,9 @@ Settings are read from `CONTRACT_INTEL_*` variables or `.env` (see
 | `CONTRACT_INTEL_LLM__EFFORT` | `medium` | Claude effort (`low` … `max`) |
 | `CONTRACT_INTEL_LLM__FALLBACKS` | `false` | Server-side fallback to another model when Claude declines |
 | `CONTRACT_INTEL_RETRIEVAL__TOP_K` | `8` | Chunks used as context per question |
+| `CONTRACT_INTEL_EXTRACTION__MODEL` | `claude-sonnet-5-5` | Clause extraction model |
+| `CONTRACT_INTEL_EXTRACTION__WINDOW_CHARS` | `24000` | Characters of whole pages per extraction call |
+| `CONTRACT_INTEL_EVALUATION__LABELS_PATH` | `data/cuad/CUAD_v1/master_clauses.csv` | CUAD lawyer labels |
 
 ## Testing strategy
 

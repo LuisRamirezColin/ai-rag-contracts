@@ -40,6 +40,10 @@ other adapter exists.
 
 ## Consequences
 
+- **Update (ADR 0009):** since clause extraction, every outbound port has a real
+  adapter, so the "not implemented yet" branch and `RealAdaptersUnavailableError`
+  were removed; the per-port `Selector` remains.
+
 - Real ingestion works today with `CONTRACT_INTEL_USE_FAKES=false`; resolving a port
   without a real adapter names the port in the error.
 - Container tests assert both branches: real ingestion adapters resolve without

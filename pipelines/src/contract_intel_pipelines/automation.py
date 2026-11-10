@@ -1,10 +1,11 @@
 """What runs on its own: the job per document and the sensor that triggers it.
 
 The sensor registers each pending document as a partition and requests one run
-of ``ingest_documents_job``, which ingests the document and then vectorizes it.
+of ``ingest_documents_job``, which ingests the document, extracts its clauses
+and then vectorizes it, so chunks are born labelled with their clause types.
 Only keys that are not partitions yet are scheduled, so a document whose
 ingestion failed is retried only when someone re-materializes it explicitly; if
-ingestion fails, Dagster skips the dependent vectorization step.
+ingestion or extraction fails, Dagster skips the dependent steps.
 """
 
 import asyncio
@@ -23,6 +24,7 @@ from contract_intel.application.ports.inbound.discover_documents import (
     DiscoverDocuments,
 )
 from contract_intel.bootstrap.writer import WriterContainer
+from contract_intel_pipelines.extraction import extracted_clauses
 from contract_intel_pipelines.ingestion import (
     DOCUMENTS_PARTITIONS_NAME,
     documents_partitions,
@@ -34,7 +36,7 @@ SENSOR_INTERVAL_SECONDS = 60
 
 ingest_documents_job = define_asset_job(
     name="ingest_documents_job",
-    selection=[ingested_document, indexed_document],
+    selection=[ingested_document, extracted_clauses, indexed_document],
     partitions_def=documents_partitions,
 )
 

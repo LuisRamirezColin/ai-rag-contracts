@@ -1,5 +1,5 @@
 from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 import pytest
 from sqlalchemy import text
@@ -45,7 +45,7 @@ def embedded(document_id, ordinal, vector, clause_type=None, pages=(1, 1)):
         document_id,
         f"text of {document_id} #{ordinal}",
         PageRange(*pages),
-        clause_type,
+        frozenset({clause_type}) if clause_type else frozenset(),
     )
     return EmbeddedChunk(chunk, vector)
 
@@ -146,3 +146,30 @@ async def test_chunk_fields_are_reconstructed(case):
     (best,) = results
     assert best.chunk == ORTHOGONAL.chunk
     assert best.chunk.pages == PageRange(7, 9)
+
+
+async def test_chunks_with_several_types_match_any_of_them(case):
+    both = embedded(DOC_B, 1, axis(0.9, 0.1, 0.0), ClauseType.EXCLUSIVITY, (5, 5))
+    both = EmbeddedChunk(
+        replace(
+            both.chunk,
+            clause_types=frozenset({ClauseType.EXCLUSIVITY, ClauseType.NON_COMPETE}),
+        ),
+        both.embedding,
+    )
+    await case.seed(DOC_A, [EXACT, CLOSE])
+    await case.seed(DOC_B, [ORTHOGONAL, both])
+
+    non_compete = await case.search.search(
+        QUERY, limit=5, clause_types=frozenset({ClauseType.NON_COMPETE})
+    )
+    exclusivity = await case.search.search(
+        QUERY, limit=5, clause_types=frozenset({ClauseType.EXCLUSIVITY})
+    )
+
+    assert {r.chunk.id for r in non_compete} == {CLOSE.chunk.id, both.chunk.id}
+    assert [r.chunk.id for r in exclusivity] == [both.chunk.id]
+    assert exclusivity[0].chunk.clause_types == {
+        ClauseType.EXCLUSIVITY,
+        ClauseType.NON_COMPETE,
+    }

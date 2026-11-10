@@ -69,7 +69,7 @@ class InMemoryVectorSearch:
         candidates = (
             embedded
             for embedded in self._store.entries.values()
-            if not clause_types or embedded.chunk.clause_type in clause_types
+            if not clause_types or embedded.chunk.clause_types & clause_types
         )
         scored = sorted(
             (

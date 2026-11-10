@@ -9,14 +9,15 @@ from contract_intel.application.ports.inbound.vectorize_document import (
 )
 from contract_intel.bootstrap.writer import WriterContainer
 from contract_intel.domain.ids import DocumentId
+from contract_intel_pipelines.extraction import extracted_clauses
 from contract_intel_pipelines.ingestion import documents_partitions, ingested_document
 
 
-@asset(partitions_def=documents_partitions, deps=[ingested_document])
+@asset(partitions_def=documents_partitions, deps=[ingested_document, extracted_clauses])
 def indexed_document(
     context: AssetExecutionContext, container: ResourceParam[WriterContainer]
 ) -> MaterializeResult:  # type: ignore[type-arg]
-    """Chunks of the document with their embeddings, written to the vector index."""
+    """Chunks with embeddings and clause types, written to the vector index."""
     use_case: VectorizeDocument = container.vectorize_document()
     chunk_count = asyncio.run(use_case.execute(DocumentId(context.partition_key)))
     return MaterializeResult(metadata={"chunk_count": chunk_count})

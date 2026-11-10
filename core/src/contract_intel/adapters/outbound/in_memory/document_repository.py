@@ -11,6 +11,7 @@ class InMemoryDocumentRepository:
     """Document repository kept in process-local dictionaries."""
 
     def __init__(self) -> None:
+        self._documents: dict[DocumentId, Document] = {}
         self._records: dict[DocumentId, IngestionRecord] = {}
         self._pages: dict[DocumentId, tuple[Page, ...]] = {}
 
@@ -20,13 +21,25 @@ class InMemoryDocumentRepository:
             Page(page.document_id, page.number, page.text.replace(NUL, ""))
             for page in sorted(pages, key=lambda page: page.number)
         )
+        self._documents[document.id] = document
         self._records[document.id] = IngestionRecord.ingested(document.id, len(ordered))
         self._pages[document.id] = ordered
 
     async def save_failed(self, document: Document, reason: str) -> None:
         """Replace the state of ``document`` with a failed record."""
+        self._documents[document.id] = document
         self._records[document.id] = IngestionRecord.failed(document.id, reason)
         self._pages.pop(document.id, None)
+
+    async def get_document(self, document_id: DocumentId) -> Document:
+        """Return the stored document.
+
+        Raises:
+            DocumentNotAvailableError: If no document is stored under the id.
+        """
+        if document_id not in self._documents:
+            raise DocumentNotAvailableError(document_id)
+        return self._documents[document_id]
 
     async def get_record(self, document_id: DocumentId) -> IngestionRecord | None:
         """Return the stored record, if any."""

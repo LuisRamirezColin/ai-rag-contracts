@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from contract_intel.domain.clause_type import ClauseType
 from contract_intel.domain.errors import (
@@ -19,7 +19,7 @@ class Chunk:
     document_id: DocumentId
     text: str
     pages: PageRange
-    clause_type: ClauseType | None = None
+    clause_types: frozenset[ClauseType] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         ensure_not_blank(self.text, "text")

@@ -124,3 +124,28 @@ def test_invalid_llm_or_retrieval_values(monkeypatch, variable, value):
     monkeypatch.setenv(variable, value)
     with pytest.raises(ValidationError):
         AppSettings(_env_file=None)
+
+
+def test_extraction_and_evaluation_defaults(monkeypatch):
+    for name in ("MODEL", "WINDOW_CHARS", "EFFORT"):
+        monkeypatch.delenv(f"CONTRACT_INTEL_EXTRACTION__{name}", raising=False)
+    monkeypatch.delenv("CONTRACT_INTEL_EVALUATION__LABELS_PATH", raising=False)
+    settings = AppSettings(_env_file=None)
+    assert settings.extraction.model == "claude-sonnet-5-5"
+    assert settings.extraction.window_chars == 24000
+    assert settings.extraction.input_price_per_million == 2.0
+    assert settings.evaluation.labels_path.name == "master_clauses.csv"
+
+
+def test_extraction_from_environment(monkeypatch):
+    monkeypatch.setenv("CONTRACT_INTEL_EXTRACTION__MODEL", "claude-opus-5-5")
+    monkeypatch.setenv("CONTRACT_INTEL_EXTRACTION__WINDOW_CHARS", "12000")
+    settings = AppSettings(_env_file=None)
+    assert settings.extraction.model == "claude-opus-5-5"
+    assert settings.extraction.window_chars == 12000
+
+
+def test_window_chars_must_be_positive(monkeypatch):
+    monkeypatch.setenv("CONTRACT_INTEL_EXTRACTION__WINDOW_CHARS", "0")
+    with pytest.raises(ValidationError):
+        AppSettings(_env_file=None)
