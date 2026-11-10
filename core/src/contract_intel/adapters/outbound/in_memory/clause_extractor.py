@@ -1,9 +1,12 @@
 from collections.abc import Mapping, Sequence
 
-from contract_intel.domain.clause import Clause
+from contract_intel.domain.clause import Clause, ClauseExtraction
 from contract_intel.domain.document import Document
 from contract_intel.domain.ids import DocumentId
 from contract_intel.domain.page import Page
+
+IN_MEMORY_EXTRACTION_MODEL = "in-memory-preconfigured"
+CHARS_PER_TOKEN = 4
 
 
 class InMemoryClauseExtractor:
@@ -16,6 +19,12 @@ class InMemoryClauseExtractor:
 
     async def extract(
         self, document: Document, pages: Sequence[Page]
-    ) -> tuple[Clause, ...]:
-        """Return the clauses configured for ``document``, or none."""
-        return self._clauses_by_document.get(document.id, ())
+    ) -> ClauseExtraction:
+        """Return the clauses configured for ``document`` with estimated tokens."""
+        clauses = self._clauses_by_document.get(document.id, ())
+        return ClauseExtraction(
+            clauses=clauses,
+            model=IN_MEMORY_EXTRACTION_MODEL,
+            input_tokens=sum(len(p.text) for p in pages) // CHARS_PER_TOKEN,
+            output_tokens=sum(len(c.text) for c in clauses) // CHARS_PER_TOKEN,
+        )

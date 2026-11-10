@@ -39,8 +39,12 @@ async def test_storage_reports_empty_files_as_missing():
 
 async def test_embedder_is_deterministic():
     embedder = InMemoryEmbedder(dimensions=4)
-    first, second, other = await embedder.embed(["same", "same", "other"])
+    batch = await embedder.embed_documents(["same", "same", "other"])
+    first, second, other = batch.embeddings
     assert first == second
+    assert await embedder.embed_query("same") == first
+    assert batch.input_tokens > 0
+    assert (embedder.document_calls, embedder.query_calls) == (1, 1)
     assert first != other
     assert first.dimensions == 4
 
@@ -51,10 +55,10 @@ async def _index(writer, embedder, chunk_id, document_id, text, clause_type):
         document_id=document_id,
         text=text,
         pages=PageRange.single(1),
-        clause_type=clause_type,
+        clause_types=frozenset({clause_type}) if clause_type else frozenset(),
     )
-    (embedding,) = await embedder.embed([text])
-    await writer.upsert([EmbeddedChunk(chunk, embedding)])
+    (embedding,) = (await embedder.embed_documents([text])).embeddings
+    await writer.replace_document(document_id, [EmbeddedChunk(chunk, embedding)])
 
 
 async def test_search_ranks_exact_match_first_and_filters_by_type():
@@ -71,7 +75,7 @@ async def test_search_ranks_exact_match_first_and_filters_by_type():
         writer, embedder, "c2", DOC_B, "may not compete", ClauseType.NON_COMPETE
     )
 
-    (query,) = await embedder.embed(["may not compete"])
+    query = await embedder.embed_query("may not compete")
     results = await search.search(query, limit=2)
     assert results[0].chunk.id == "c2"
 
@@ -91,6 +95,7 @@ async def test_writer_deletes_only_the_given_document():
 
 
 async def test_answer_generator_without_context():
-    answer = await InMemoryAnswerGenerator().generate("Any MFN?", [])
-    assert answer.text == NO_CONTEXT_ANSWER
-    assert answer.citations == ()
+    generated = await InMemoryAnswerGenerator().generate("Any MFN?", [])
+    assert generated.answer.text == NO_CONTEXT_ANSWER
+    assert generated.answer.citations == ()
+    assert generated.model

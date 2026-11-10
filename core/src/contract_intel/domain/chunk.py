@@ -1,7 +1,11 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from contract_intel.domain.clause_type import ClauseType
-from contract_intel.domain.errors import EmptyEmbeddingError
+from contract_intel.domain.errors import (
+    EmbeddingDimensionMismatchError,
+    EmptyEmbeddingError,
+    NegativeQuantityError,
+)
 from contract_intel.domain.ids import ChunkId, DocumentId
 from contract_intel.domain.page import PageRange
 from contract_intel.domain.text import ensure_not_blank
@@ -15,7 +19,7 @@ class Chunk:
     document_id: DocumentId
     text: str
     pages: PageRange
-    clause_type: ClauseType | None = None
+    clause_types: frozenset[ClauseType] = field(default_factory=frozenset)
 
     def __post_init__(self) -> None:
         ensure_not_blank(self.text, "text")
@@ -35,6 +39,24 @@ class Embedding:
     def dimensions(self) -> int:
         """Number of components of the vector."""
         return len(self.values)
+
+
+@dataclass(frozen=True, slots=True)
+class EmbeddingBatch:
+    """Embeddings of several texts plus what computing them consumed."""
+
+    embeddings: tuple[Embedding, ...]
+    input_tokens: int
+    model: str
+
+    def __post_init__(self) -> None:
+        ensure_not_blank(self.model, "model")
+        if self.input_tokens < 0:
+            raise NegativeQuantityError("input_tokens", self.input_tokens)
+        dimensions = {embedding.dimensions for embedding in self.embeddings}
+        if len(dimensions) > 1:
+            expected, actual = sorted(dimensions)[:2]
+            raise EmbeddingDimensionMismatchError(expected, actual)
 
 
 @dataclass(frozen=True, slots=True)

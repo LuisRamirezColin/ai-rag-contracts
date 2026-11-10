@@ -12,6 +12,11 @@ dependencies = [
     "asyncpg>=0.29",
     "alembic>=1.13",
     "pgvector>=0.3",
+    "boto3>=1.35",
+    "pypdf>=5.0",
+    "voyageai>=0.3",
+    "anthropic>=1.0",
+    "langgraph>=0.2",
 ]
 
 [build-system]

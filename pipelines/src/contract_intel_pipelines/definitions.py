@@ -6,8 +6,26 @@ Ops and assets obtain use cases from the writer container exposed as the
 
 from dagster import Definitions
 
-from contract_intel.bootstrap.containers import build_writer_container
+from contract_intel.bootstrap.writer import build_writer_container
+from contract_intel_pipelines.automation import (
+    ingest_documents_job,
+    pending_documents_sensor,
+)
+from contract_intel_pipelines.evaluation import extraction_evaluation
+from contract_intel_pipelines.extraction import extracted_clauses
+from contract_intel_pipelines.ingestion import ingested_document
+from contract_intel_pipelines.vectorization import indexed_document
 
 CONTAINER_RESOURCE_KEY = "container"
 
-defs = Definitions(resources={CONTAINER_RESOURCE_KEY: build_writer_container()})
+defs = Definitions(
+    assets=[
+        ingested_document,
+        extracted_clauses,
+        indexed_document,
+        extraction_evaluation,
+    ],
+    jobs=[ingest_documents_job],
+    sensors=[pending_documents_sensor],
+    resources={CONTAINER_RESOURCE_KEY: build_writer_container()},
+)

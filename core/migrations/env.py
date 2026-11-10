@@ -12,6 +12,7 @@ from alembic import context
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from contract_intel.adapters.outbound.persistence import models  # noqa: F401 - registers tables
 from contract_intel.adapters.outbound.persistence.base import Base
 from contract_intel.bootstrap.settings import AppSettings
 

@@ -1,6 +1,6 @@
 # ADR 0003 — Composition root with separate reader and writer containers
 
-- **Status:** Accepted
+- **Status:** Accepted (amended by [ADR 0006](0006-lazy-per-port-adapter-selection.md))
 - **Date:** 2026-11-09
 
 ## Context

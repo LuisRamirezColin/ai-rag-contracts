@@ -16,6 +16,9 @@ from contract_intel.adapters.outbound.in_memory.clause_extractor import (
 from contract_intel.adapters.outbound.in_memory.contract_repository import (
     InMemoryContractRepository,
 )
+from contract_intel.adapters.outbound.in_memory.document_repository import (
+    InMemoryDocumentRepository,
+)
 from contract_intel.adapters.outbound.in_memory.document_source import (
     InMemoryDocumentSource,
 )
@@ -23,6 +26,9 @@ from contract_intel.adapters.outbound.in_memory.document_storage import (
     InMemoryDocumentStorage,
 )
 from contract_intel.adapters.outbound.in_memory.embedder import InMemoryEmbedder
+from contract_intel.adapters.outbound.in_memory.ground_truth_source import (
+    InMemoryGroundTruthSource,
+)
 from contract_intel.adapters.outbound.in_memory.text_extractor import (
     InMemoryTextExtractor,
 )
@@ -39,9 +45,15 @@ from contract_intel.application.ports.outbound.clause_extractor import ClauseExt
 from contract_intel.application.ports.outbound.contract_repository import (
     ContractRepository,
 )
+from contract_intel.application.ports.outbound.document_repository import (
+    DocumentRepository,
+)
 from contract_intel.application.ports.outbound.document_source import DocumentSource
 from contract_intel.application.ports.outbound.document_storage import DocumentStorage
 from contract_intel.application.ports.outbound.embedder import Embedder
+from contract_intel.application.ports.outbound.ground_truth_source import (
+    GroundTruthSource,
+)
 from contract_intel.application.ports.outbound.text_extractor import TextExtractor
 from contract_intel.application.ports.outbound.usage_tracker import UsageTracker
 from contract_intel.application.ports.outbound.vector_index_writer import (
@@ -53,6 +65,7 @@ _store = InMemoryVectorStore()
 
 document_source: DocumentSource = InMemoryDocumentSource()
 document_storage: DocumentStorage = InMemoryDocumentStorage()
+document_repository: DocumentRepository = InMemoryDocumentRepository()
 text_extractor: TextExtractor = InMemoryTextExtractor()
 clause_extractor: ClauseExtractor = InMemoryClauseExtractor()
 embedder: Embedder = InMemoryEmbedder()
@@ -61,6 +74,7 @@ vector_search: VectorSearch = InMemoryVectorSearch(_store)
 contract_repository: ContractRepository = InMemoryContractRepository()
 answer_generator: AnswerGenerator = InMemoryAnswerGenerator()
 usage_tracker: UsageTracker = InMemoryUsageTracker()
+ground_truth_source: GroundTruthSource = InMemoryGroundTruthSource()
 
 
 @pytest.mark.parametrize(
@@ -68,6 +82,7 @@ usage_tracker: UsageTracker = InMemoryUsageTracker()
     [
         (document_source, DocumentSource),
         (document_storage, DocumentStorage),
+        (document_repository, DocumentRepository),
         (text_extractor, TextExtractor),
         (clause_extractor, ClauseExtractor),
         (embedder, Embedder),
@@ -76,6 +91,7 @@ usage_tracker: UsageTracker = InMemoryUsageTracker()
         (contract_repository, ContractRepository),
         (answer_generator, AnswerGenerator),
         (usage_tracker, UsageTracker),
+        (ground_truth_source, GroundTruthSource),
     ],
     ids=lambda value: getattr(value, "__name__", type(value).__name__),
 )
@@ -94,6 +110,7 @@ def test_every_outbound_port_has_an_in_memory_adapter():
     covered = {
         "document_source",
         "document_storage",
+        "document_repository",
         "text_extractor",
         "clause_extractor",
         "embedder",
@@ -102,5 +119,6 @@ def test_every_outbound_port_has_an_in_memory_adapter():
         "contract_repository",
         "answer_generator",
         "usage_tracker",
+        "ground_truth_source",
     }
     assert port_modules == covered

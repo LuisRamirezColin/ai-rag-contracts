@@ -9,8 +9,14 @@ from contract_intel.domain.ids import DocumentId
 class VectorIndexWriter(Protocol):
     """Write side of the vector index; used only by the ingestion pipelines."""
 
-    async def upsert(self, chunks: Sequence[EmbeddedChunk]) -> None:
-        """Insert or replace ``chunks`` in the index."""
+    async def replace_document(
+        self, document_id: DocumentId, chunks: Sequence[EmbeddedChunk]
+    ) -> None:
+        """Atomically replace every chunk of ``document_id`` with ``chunks``.
+
+        Raises:
+            ChunkDocumentMismatchError: If a chunk belongs to another document.
+        """
         ...
 
     async def delete_document(self, document_id: DocumentId) -> None:

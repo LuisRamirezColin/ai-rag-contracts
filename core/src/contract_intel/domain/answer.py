@@ -1,5 +1,6 @@
 from dataclasses import dataclass, field
 
+from contract_intel.domain.errors import NegativeQuantityError
 from contract_intel.domain.ids import DocumentId
 from contract_intel.domain.page import PageRange
 from contract_intel.domain.text import ensure_not_blank
@@ -28,3 +29,20 @@ class Answer:
     def __post_init__(self) -> None:
         ensure_not_blank(self.question, "question")
         ensure_not_blank(self.text, "text")
+
+
+@dataclass(frozen=True, slots=True)
+class GeneratedAnswer:
+    """An answer plus the model that produced it and the tokens it consumed."""
+
+    answer: Answer
+    model: str
+    input_tokens: int
+    output_tokens: int
+
+    def __post_init__(self) -> None:
+        ensure_not_blank(self.model, "model")
+        for field_name in ("input_tokens", "output_tokens"):
+            value = getattr(self, field_name)
+            if value < 0:
+                raise NegativeQuantityError(field_name, value)
